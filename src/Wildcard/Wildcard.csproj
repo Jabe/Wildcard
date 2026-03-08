@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Wildcard</RootNamespace>
+    <PackageId>Wildcard</PackageId>
+    <Description>A minimal, high-performance wildcard pattern matcher (*, ?, character classes) that avoids the full Regex engine overhead.</Description>
+  </PropertyGroup>
+
+</Project>
