@@ -1,6 +1,10 @@
 # Wildcard
 
-A high-performance .NET library for wildcard pattern matching. Provides a lightweight alternative to the full Regex engine, optimized for speed and low memory usage.
+A high-performance .NET 10 library for wildcard pattern matching. Provides a lightweight alternative to the full Regex engine, optimized for speed and low memory usage.
+
+## Requirements
+
+- .NET 10.0 or later
 
 ## Supported Syntax
 
@@ -67,5 +71,7 @@ This approach avoids the exponential worst-case that naive recursive implementat
 
 - **Zero-copy matching** — uses `ReadOnlySpan<char>` to avoid string allocations during matching.
 - **Aggressive inlining** — hot-path methods like `MatchLiteral` and `CharsEqual` use `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
-- **Parallel bulk operations** — `WildcardSearch.FilterBulk` processes arrays of 1024+ items in parallel using `Parallel.ForEach`.
+- **SIMD-accelerated character classes** — character class segments (`[a-z]`, `[abc]`) use `SearchValues<char>` for hardware-accelerated membership testing, leveraging vectorized instructions on supported hardware.
+- **Parallel bulk operations** — `WildcardSearch.FilterBulk` processes arrays of 1024+ items in parallel using PLINQ with order preservation.
 - **SIMD-accelerated search** — `VectorizedIndexOf` delegates to the runtime's optimized `Span.IndexOf`, which uses SIMD instructions when available.
+- **.NET 10 runtime optimizations** — benefits from improved JIT tiered compilation, better bounds-check elimination for span operations, enhanced `SequenceEqual`/`IndexOf` vectorization, and improved GC performance.

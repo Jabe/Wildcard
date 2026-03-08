@@ -169,25 +169,34 @@ public sealed class WildcardPattern
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool MatchCharClass(in Segment seg, char c, bool ignoreCase)
     {
-        bool found = false;
+        bool found;
 
-        foreach (var range in seg.Ranges.AsSpan())
+        if (!ignoreCase && seg.SearchChars is not null)
         {
-            if (ignoreCase)
+            // SIMD-accelerated path using SearchValues<char>
+            found = seg.SearchChars.Contains(c);
+        }
+        else
+        {
+            found = false;
+            foreach (var range in seg.Ranges.AsSpan())
             {
-                char cu = char.ToUpperInvariant(c);
-                if (cu >= char.ToUpperInvariant(range.Lo) && cu <= char.ToUpperInvariant(range.Hi))
+                if (ignoreCase)
                 {
-                    found = true;
-                    break;
+                    char cu = char.ToUpperInvariant(c);
+                    if (cu >= char.ToUpperInvariant(range.Lo) && cu <= char.ToUpperInvariant(range.Hi))
+                    {
+                        found = true;
+                        break;
+                    }
                 }
-            }
-            else
-            {
-                if (c >= range.Lo && c <= range.Hi)
+                else
                 {
-                    found = true;
-                    break;
+                    if (c >= range.Lo && c <= range.Hi)
+                    {
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
