@@ -1,8 +1,4 @@
-using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 
 namespace Wildcard;
 
@@ -100,14 +96,7 @@ public static class WildcardSearch
             return inputs.Where(s => pattern.IsMatch(s)).ToArray();
         }
 
-        // For large arrays, partition and filter in parallel
-        var bag = new System.Collections.Concurrent.ConcurrentBag<string>();
-        Parallel.ForEach(inputs, input =>
-        {
-            if (pattern.IsMatch(input))
-                bag.Add(input);
-        });
-
-        return bag.ToArray();
+        // For large arrays, use PLINQ with order preservation
+        return inputs.AsParallel().AsOrdered().Where(s => pattern.IsMatch(s)).ToArray();
     }
 }
