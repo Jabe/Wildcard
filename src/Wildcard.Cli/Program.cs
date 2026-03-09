@@ -4,78 +4,65 @@ var (parsed, exitCode) = ParseArgs(args);
 if (parsed is null)
     return exitCode;
 
-// 1. Glob for matching files
-var files = Glob.Match(parsed.GlobPattern).ToArray();
+bool useColor = !Console.IsOutputRedirected;
+var cwd = Directory.GetCurrentDirectory();
+bool anyOutput = false;
 
-if (files.Length == 0)
-    return 1;
-
-// 2. No content pattern — just list files
+// No content pattern — just list files as they're found
 if (parsed.ContentPattern is null)
 {
-    foreach (var file in files)
-        Console.WriteLine(Path.GetRelativePath(Directory.GetCurrentDirectory(), file));
-    return 0;
+    foreach (var file in Glob.Match(parsed.GlobPattern))
+    {
+        Console.WriteLine(Path.GetRelativePath(cwd, file));
+        anyOutput = true;
+    }
+    return anyOutput ? 0 : 1;
 }
 
-// 3. Content search
+// Content search — scan and print per-file for streaming output
 var matcher = FilePathMatcher.Create(
     include: [parsed.ContentPattern],
     exclude: parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null,
     options: parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null
 );
 
-// Extract the literal from the content pattern for highlighting (e.g. "*ERROR*" → "ERROR")
 string? highlightLiteral = ExtractHighlightLiteral(parsed.ContentPattern, parsed.IgnoreCase);
 
-var matches = matcher.Scan(files);
-if (matches.Count == 0)
-    return 1;
-
-// 4. Format output
-bool useColor = !Console.IsOutputRedirected;
-var cwd = Directory.GetCurrentDirectory();
-
-string? lastFile = null;
-// Compute max line number width per file for alignment
-var lineNumberWidths = new Dictionary<string, int>();
-foreach (var m in matches)
+foreach (var file in Glob.Match(parsed.GlobPattern))
 {
-    if (!lineNumberWidths.TryGetValue(m.FilePath, out var w) || m.LineNumber.ToString().Length > w)
-        lineNumberWidths[m.FilePath] = m.LineNumber.ToString().Length;
-}
+    var fileMatches = matcher.Scan(file);
+    if (fileMatches.Count == 0) continue;
 
-foreach (var match in matches)
-{
-    var relPath = Path.GetRelativePath(cwd, match.FilePath);
-
-    if (lastFile != match.FilePath)
-    {
-        if (lastFile is not null)
-            Console.WriteLine();
-        if (useColor)
-            Console.WriteLine($"\x1b[35m{relPath}\x1b[0m");
-        else
-            Console.WriteLine(relPath);
-        lastFile = match.FilePath;
-    }
-
-    int width = lineNumberWidths[match.FilePath];
-    var lineNum = match.LineNumber.ToString().PadLeft(width);
-
-    if (useColor)
-    {
-        Console.Write($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
-        WriteHighlighted(match.Line, highlightLiteral, parsed.IgnoreCase);
+    if (anyOutput)
         Console.WriteLine();
-    }
+    anyOutput = true;
+
+    var relPath = Path.GetRelativePath(cwd, file);
+    if (useColor)
+        Console.WriteLine($"\x1b[35m{relPath}\x1b[0m");
     else
+        Console.WriteLine(relPath);
+
+    int width = fileMatches[^1].LineNumber.ToString().Length;
+
+    foreach (var match in fileMatches)
     {
-        Console.WriteLine($"  {lineNum}: {match.Line}");
+        var lineNum = match.LineNumber.ToString().PadLeft(width);
+
+        if (useColor)
+        {
+            Console.Write($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
+            WriteHighlighted(match.Line, highlightLiteral, parsed.IgnoreCase);
+            Console.WriteLine();
+        }
+        else
+        {
+            Console.WriteLine($"  {lineNum}: {match.Line}");
+        }
     }
 }
 
-return 0;
+return anyOutput ? 0 : 1;
 
 // --- Argument parsing ---
 
