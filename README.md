@@ -81,6 +81,36 @@ await foreach (var match in matcher.ScanAsync(filePaths))
     Console.WriteLine(match.Line);
 ```
 
+### File System Globbing
+
+`Glob` matches file paths on disk with support for `*`, `?`, `[abc]`, and `**` (recursive directory matching).
+
+```csharp
+// Find all .cs files recursively
+var files = Glob.Match("src/**/*.cs").ToList();
+
+// Single directory level
+var logs = Glob.Match("/var/log/*.log").ToList();
+
+// Pre-parsed glob for reuse
+var glob = Glob.Parse("**/*.json");
+foreach (var file in glob.EnumerateMatches("/my/project"))
+    Console.WriteLine(file);
+```
+
+### CLI Tool — `wcg`
+
+A command-line grep tool built on top of the library. Streams results as they're found.
+
+```
+Usage: wcg <glob> [pattern] [options]
+
+  wcg "src/**/*.cs"                     List matching files
+  wcg "**/*.log" "*ERROR*"               Search for ERROR in log files
+  wcg "**/*.cs" "*TODO*" -x "*DONE*"     Search TODO, exclude DONE
+  wcg "**/*.cs" "*TODO*" -i              Case-insensitive search
+```
+
 ## Benchmarks
 
 Measured on Apple M4 Pro, .NET 10.0, Arm64 RyuJIT AdvSIMD. Zero allocations for all single-match operations.
