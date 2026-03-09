@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Wildcard;
 
@@ -140,6 +142,90 @@ public sealed class WildcardPattern
     }
 
     public override string ToString() => _original;
+
+    /// <summary>
+    /// Converts this wildcard pattern into an equivalent <see cref="Regex"/>.
+    /// Useful for interop with APIs that accept <see cref="Regex"/>.
+    /// </summary>
+    public Regex ToRegex()
+    {
+        var sb = new StringBuilder("^");
+        int i = 0;
+
+        while (i < _original.Length)
+        {
+            char c = _original[i];
+            switch (c)
+            {
+                case '*':
+                    sb.Append(".*");
+                    // Collapse consecutive stars
+                    while (i + 1 < _original.Length && _original[i + 1] == '*') i++;
+                    i++;
+                    break;
+
+                case '?':
+                    sb.Append('.');
+                    i++;
+                    break;
+
+                case '[':
+                    sb.Append('[');
+                    i++;
+                    // Handle negation: [! or [^ → [^
+                    if (i < _original.Length && (_original[i] == '!' || _original[i] == '^'))
+                    {
+                        sb.Append('^');
+                        i++;
+                    }
+                    // Copy until closing ]
+                    bool first = true;
+                    while (i < _original.Length)
+                    {
+                        char cc = _original[i];
+                        if (cc == ']' && !first)
+                        {
+                            sb.Append(']');
+                            i++;
+                            break;
+                        }
+                        first = false;
+                        if (cc == '\\' && i + 1 < _original.Length)
+                        {
+                            sb.Append('\\');
+                            i++;
+                            sb.Append(_original[i]);
+                            i++;
+                        }
+                        else
+                        {
+                            sb.Append(cc);
+                            i++;
+                        }
+                    }
+                    break;
+
+                case '\\':
+                    i++;
+                    if (i < _original.Length)
+                    {
+                        sb.Append(Regex.Escape(_original[i].ToString()));
+                        i++;
+                    }
+                    break;
+
+                default:
+                    // Escape regex metacharacters in literals
+                    sb.Append(Regex.Escape(c.ToString()));
+                    i++;
+                    break;
+            }
+        }
+
+        sb.Append('$');
+        var options = _ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
+        return new Regex(sb.ToString(), options);
+    }
 
     // --- Core matching engine using backtracking with optimized fast-paths ---
 
