@@ -15,6 +15,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmarks", "benchmarks", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wildcard.Benchmarks", "benchmarks\Wildcard.Benchmarks\Wildcard.Benchmarks.csproj", "{328A1042-521E-478C-AC2A-D963ADB665BC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wildcard.Cli", "src\Wildcard.Cli\Wildcard.Cli.csproj", "{5F8B7C81-FCA8-469B-B237-6E9DD932B259}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -61,6 +63,18 @@ Global
 		{328A1042-521E-478C-AC2A-D963ADB665BC}.Release|x64.Build.0 = Release|Any CPU
 		{328A1042-521E-478C-AC2A-D963ADB665BC}.Release|x86.ActiveCfg = Release|Any CPU
 		{328A1042-521E-478C-AC2A-D963ADB665BC}.Release|x86.Build.0 = Release|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Debug|x64.Build.0 = Debug|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Debug|x86.Build.0 = Debug|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Release|x64.ActiveCfg = Release|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Release|x64.Build.0 = Release|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Release|x86.ActiveCfg = Release|Any CPU
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -69,5 +83,6 @@ Global
 		{BA144560-A86E-413E-93B7-311695430EFF} = {0091E7DD-E63C-4A16-A24C-1F06B9466539}
 		{8A9AF3CA-F2A6-48B2-8536-3ADDECB17AD1} = {8923BAB3-FCA1-43F2-BC39-EFCB521C700E}
 		{328A1042-521E-478C-AC2A-D963ADB665BC} = {66320409-64EC-F7C5-3DEF-65E7510DAAD1}
+		{5F8B7C81-FCA8-469B-B237-6E9DD932B259} = {0091E7DD-E63C-4A16-A24C-1F06B9466539}
 	EndGlobalSection
 EndGlobal
