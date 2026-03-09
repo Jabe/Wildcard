@@ -70,6 +70,10 @@ public sealed class WildcardPattern
         return char.ToUpperInvariant(a) == char.ToUpperInvariant(b);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsLastSegment(ReadOnlySpan<Segment> segments, int idx)
+        => idx + 1 >= segments.Length;
+
     private static bool MatchCore(ReadOnlySpan<Segment> segments, ReadOnlySpan<char> input, bool ignoreCase)
     {
         // dp-style backtracking: track the last '*' position
@@ -101,10 +105,22 @@ public sealed class WildcardPattern
                         starSegIdx = segIdx;
                         starInputIdx = inputIdx;
                         segIdx++;
-                        // Fast-path: jump to first occurrence of the next literal
-                        if (segIdx < segments.Length && segments[segIdx].Kind == SegmentKind.Literal)
+                        // If this star is the last segment, it matches everything remaining
+                        if (segIdx >= segments.Length)
+                            return true;
+                        if (segments[segIdx].Kind == SegmentKind.Literal)
                         {
                             var nextLit = segments[segIdx].Literal.AsSpan();
+                            // EndsWith fast-path: if this literal is the last meaningful segment
+                            if (IsLastSegment(segments, segIdx))
+                            {
+                                int suffixStart = input.Length - nextLit.Length;
+                                if (suffixStart < inputIdx) return false;
+                                return ignoreCase
+                                    ? input[suffixStart..].Equals(nextLit, StringComparison.OrdinalIgnoreCase)
+                                    : input[suffixStart..].SequenceEqual(nextLit);
+                            }
+                            // IndexOf fast-path: jump to first occurrence of the next literal
                             int found = ignoreCase
                                 ? input[inputIdx..].IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
                                 : input[inputIdx..].IndexOf(nextLit);
