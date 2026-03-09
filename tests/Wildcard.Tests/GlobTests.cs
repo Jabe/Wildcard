@@ -216,4 +216,23 @@ public class GlobTests : IDisposable
         var results = Glob("**/*");
         Assert.Equal(7, results.Count); // all 7 files
     }
+
+    [Fact]
+    public void DoubleStar_Only_MatchesAllFiles()
+    {
+        var results = Glob("**");
+        Assert.Equal(7, results.Count);
+    }
+
+    [Fact]
+    public void DoubleStar_UnderDirectory_MatchesAllFiles()
+    {
+        var results = Glob("src/**");
+        Assert.Contains("src/Program.cs", results);
+        Assert.Contains("src/Lib.cs", results);
+        Assert.Contains("src/utils/Helper.cs", results);
+        Assert.Contains("src/utils/data.json", results);
+        Assert.Contains("src/deep/nested/File.cs", results);
+        Assert.Equal(5, results.Count);
+    }
 }

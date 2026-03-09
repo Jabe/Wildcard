@@ -94,9 +94,14 @@ public sealed class Glob
         if (segmentIndex >= _segments.Length)
         {
             // All segments consumed — yield files at this location
-            // This happens after ** consumed all remaining segments
             if (File.Exists(currentDir))
                 yield return currentDir;
+            else if (Directory.Exists(currentDir))
+            {
+                // Terminal ** consumed all segments — yield all files in this directory
+                foreach (var file in EnumerateFilesSafe(currentDir))
+                    yield return file;
+            }
             yield break;
         }
 
