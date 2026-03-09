@@ -56,6 +56,31 @@ List<string> csharpFiles = WildcardSearch.FilterLines(pattern, files);
 string[] results = WildcardSearch.FilterBulk(pattern, largeArray, parallel: true);
 ```
 
+### File Content Scanning
+
+`FilePathMatcher` scans files on disk for lines matching wildcard patterns using memory-mapped I/O.
+
+```csharp
+// Single include pattern
+var matcher = FilePathMatcher.Create("*ERROR*");
+List<FilePathMatcher.LineMatch> matches = matcher.Scan("app.log", "server.log");
+
+foreach (var match in matches)
+    Console.WriteLine($"{match.FilePath}:{match.LineNumber}: {match.Line}");
+
+// Include/exclude patterns — match lines containing ERROR but not DEBUG
+var matcher = FilePathMatcher.Create(
+    include: ["*ERROR*"],
+    exclude: ["*DEBUG*"]
+);
+var matches = matcher.Scan("app.log");
+
+// Async streaming — results arrive as they are found
+var matcher = FilePathMatcher.Create("*timeout*");
+await foreach (var match in matcher.ScanAsync(filePaths))
+    Console.WriteLine(match.Line);
+```
+
 ## Benchmarks
 
 Measured on Apple M4 Pro, .NET 10.0, Arm64 RyuJIT AdvSIMD. Zero allocations for all single-match operations.
@@ -97,6 +122,16 @@ Measured on Apple M4 Pro, .NET 10.0, Arm64 RyuJIT AdvSIMD. Zero allocations for 
 | Wildcard FilterBulk (parallel) | 61 µs | 174 KB |
 | FSName LINQ filter | 68 µs | 10 KB |
 | Regex LINQ filter | 198 µs | 11 KB |
+
+### File Content Scanning — `FilePathMatcher`
+
+Pattern `*ERROR*` across 4 log files (~12.5% matching lines). Compared against `File.ReadAllLines` + `FilterLines` baseline.
+
+| File size | Baseline (ReadAllLines) | FilePathMatcher | Ratio | Alloc Ratio |
+|-----------|------------------------|-----------------|-------|-------------|
+| small (1K lines) | 279 µs | 79 µs | 0.29 | 0.15 |
+| medium (100K lines) | 52,811 µs | 7,796 µs | 0.15 | 0.15 |
+| large (1M lines) | 558,834 µs | 110,174 µs | 0.20 | 0.15 |
 
 ## How It Works
 
@@ -145,3 +180,13 @@ This approach avoids the exponential worst-case that naive recursive implementat
 - **SIMD-accelerated character classes** — `SearchValues<char>` provides hardware-accelerated membership testing. For case-insensitive patterns, both upper and lower case variants are expanded at compile time so the SIMD path works unconditionally.
 - **`ref readonly` struct access** — segments are accessed by reference in the hot loop to avoid copying the struct on each iteration.
 - **Parallel bulk operations** — `WildcardSearch.FilterBulk` processes arrays of 1024+ items in parallel using PLINQ with order preservation.
+
+### 5. File Content Scanning
+
+`FilePathMatcher` scans files on disk using memory-mapped I/O and parallel processing:
+
+- **Memory-mapped I/O** — files are mapped directly into memory, avoiding buffered read overhead. Files over 2GB are processed in 1GB overlapping sections.
+- **Byte-level pre-filtering** — for ASCII, case-sensitive patterns over UTF-8 data, pattern matching runs directly on raw bytes using SIMD-accelerated span operations (`IndexOf`, `StartsWith`, `EndsWith`). Lines that don't match skip UTF-8 decoding entirely.
+- **Minimum length gate** — lines shorter than the pattern's minimum possible match length are rejected before any decoding or matching.
+- **Parallel multi-file scanning** — multiple files are scanned concurrently via `Parallel.For`, with results merged preserving file order.
+- **Async streaming** — `ScanAsync` uses a bounded channel to stream matches as they are found.
