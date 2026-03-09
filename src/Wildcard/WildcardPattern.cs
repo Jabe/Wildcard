@@ -17,7 +17,7 @@ public sealed class WildcardPattern
     private readonly string? _prefix;
     private readonly string? _suffix;
 
-    private enum PatternShape : byte
+    internal enum PatternShape : byte
     {
         General,
         PureLiteral,
@@ -31,6 +31,11 @@ public sealed class WildcardPattern
     /// The minimum input length that could possibly match this pattern.
     /// </summary>
     public int MinLength { get; }
+
+    internal PatternShape Shape => _shape;
+    internal string? Prefix => _prefix;
+    internal string? Suffix => _suffix;
+    internal bool IgnoreCase => _ignoreCase;
 
     private WildcardPattern(string pattern, Segment[] segments, bool ignoreCase)
     {

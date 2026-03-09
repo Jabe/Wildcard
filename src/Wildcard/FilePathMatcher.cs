@@ -41,6 +41,12 @@ public sealed class FilePathMatcher
     // Single-include fast path
     private readonly WildcardPattern? _singleInclude;
 
+    // Byte-level pre-filter for ASCII patterns over UTF-8
+    private readonly byte[]? _bytePrefix;
+    private readonly byte[]? _byteSuffix;
+    private readonly WildcardPattern.PatternShape _bytePreFilterShape;
+    private readonly bool _bytePreFilterEnabled;
+
     private FilePathMatcher(WildcardPattern[] includes, WildcardPattern[]? excludes, Options options)
     {
         _includes = includes;
@@ -48,6 +54,45 @@ public sealed class FilePathMatcher
         _encoding = options.Encoding ?? Encoding.UTF8;
         _singleInclude = includes.Length == 1 ? includes[0] : null;
         _minLineLength = ComputeMinLength(includes);
+        InitBytePreFilter(_singleInclude, _encoding, out _bytePreFilterEnabled, out _bytePreFilterShape, out _bytePrefix, out _byteSuffix);
+    }
+
+    private static void InitBytePreFilter(
+        WildcardPattern? pattern, Encoding encoding,
+        out bool enabled, out WildcardPattern.PatternShape shape,
+        out byte[]? bytePrefix, out byte[]? byteSuffix)
+    {
+        enabled = false;
+        shape = default;
+        bytePrefix = null;
+        byteSuffix = null;
+
+        if (pattern is null || pattern.IgnoreCase || encoding.CodePage != 65001)
+            return;
+
+        var s = pattern.Shape;
+        if (s == WildcardPattern.PatternShape.General)
+            return;
+
+        // Check literals are pure ASCII
+        if (pattern.Prefix is not null && !IsAscii(pattern.Prefix))
+            return;
+        if (pattern.Suffix is not null && !IsAscii(pattern.Suffix))
+            return;
+
+        shape = s;
+        bytePrefix = pattern.Prefix is not null ? Encoding.UTF8.GetBytes(pattern.Prefix) : null;
+        byteSuffix = pattern.Suffix is not null ? Encoding.UTF8.GetBytes(pattern.Suffix) : null;
+        enabled = true;
+    }
+
+    private static bool IsAscii(string s)
+    {
+        foreach (char c in s)
+        {
+            if (c >= 128) return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -109,7 +154,9 @@ public sealed class FilePathMatcher
             perFile[i] = local;
         });
 
-        var merged = new List<LineMatch>();
+        int total = 0;
+        foreach (var list in perFile) total += list.Count;
+        var merged = new List<LineMatch>(total);
         foreach (var list in perFile)
             merged.AddRange(list);
         return merged;
@@ -340,32 +387,68 @@ public sealed class FilePathMatcher
         if (lineBytes.Length < _minLineLength)
             return;
 
-        // Decode to chars
-        int charCount;
-        if (lineBytes.Length <= charBuffer.Length)
+        // Byte-level pre-filter: avoid decoding non-matching lines
+        if (_bytePreFilterEnabled)
         {
-            charCount = _encoding.GetChars(lineBytes, charBuffer);
-        }
-        else
-        {
-            // Very long line: rent a bigger buffer
-            var bigBuffer = ArrayPool<char>.Shared.Rent(lineBytes.Length);
-            try
+            bool byteMatch = _bytePreFilterShape switch
             {
-                charCount = _encoding.GetChars(lineBytes, bigBuffer);
-                if (IsLineMatch(bigBuffer.AsSpan(0, charCount)))
-                    results.Add(new LineMatch(filePath, lineNumber, new string(bigBuffer, 0, charCount)));
-            }
-            finally
+                WildcardPattern.PatternShape.StarContainsStar =>
+                    lineBytes.IndexOf(_bytePrefix) >= 0,
+                WildcardPattern.PatternShape.PureLiteral =>
+                    lineBytes.Length == _bytePrefix!.Length && lineBytes.SequenceEqual(_bytePrefix),
+                WildcardPattern.PatternShape.StarSuffix =>
+                    lineBytes.EndsWith(_byteSuffix),
+                WildcardPattern.PatternShape.PrefixStar =>
+                    lineBytes.StartsWith(_bytePrefix),
+                WildcardPattern.PatternShape.PrefixStarSuffix =>
+                    lineBytes.StartsWith(_bytePrefix) && lineBytes.EndsWith(_byteSuffix),
+                _ => true,
+            };
+
+            if (!byteMatch) return;
+
+            // Byte filter is exact for ASCII/UTF-8 — skip IsLineMatch when no excludes
+            if (_excludes is null)
             {
-                ArrayPool<char>.Shared.Return(bigBuffer);
+                int c = DecodeToChars(lineBytes, charBuffer, out var big);
+                try
+                {
+                    var span = big is not null ? big.AsSpan(0, c) : charBuffer.AsSpan(0, c);
+                    results.Add(new LineMatch(filePath, lineNumber, span.ToString()));
+                }
+                finally
+                {
+                    if (big is not null) ArrayPool<char>.Shared.Return(big);
+                }
+                return;
             }
-            return;
         }
 
-        var lineChars = charBuffer.AsSpan(0, charCount);
-        if (IsLineMatch(lineChars))
-            results.Add(new LineMatch(filePath, lineNumber, lineChars.ToString()));
+        // Decode to chars
+        int charCount = DecodeToChars(lineBytes, charBuffer, out var bigBuffer);
+        try
+        {
+            var lineChars = bigBuffer is not null ? bigBuffer.AsSpan(0, charCount) : charBuffer.AsSpan(0, charCount);
+            if (IsLineMatch(lineChars))
+                results.Add(new LineMatch(filePath, lineNumber, lineChars.ToString()));
+        }
+        finally
+        {
+            if (bigBuffer is not null) ArrayPool<char>.Shared.Return(bigBuffer);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int DecodeToChars(ReadOnlySpan<byte> lineBytes, char[] charBuffer, out char[]? rentedBuffer)
+    {
+        if (lineBytes.Length <= charBuffer.Length)
+        {
+            rentedBuffer = null;
+            return _encoding.GetChars(lineBytes, charBuffer);
+        }
+
+        rentedBuffer = ArrayPool<char>.Shared.Rent(lineBytes.Length);
+        return _encoding.GetChars(lineBytes, rentedBuffer);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
