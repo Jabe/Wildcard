@@ -31,9 +31,18 @@ internal static class PatternCompiler
                     break;
 
                 case '[':
-                    FlushLiteral(segments, literalBuf);
                     i++;
-                    segments.Add(ParseCharClass(pattern, ref i));
+                    var ccSeg = ParseCharClass(pattern, ref i);
+                    // Promote single-char non-negated class to literal (merges with adjacent)
+                    if (!ccSeg.Negated && ccSeg.Ranges.Length == 1 && ccSeg.Ranges[0].Lo == ccSeg.Ranges[0].Hi)
+                    {
+                        literalBuf.Append(ccSeg.Ranges[0].Lo);
+                    }
+                    else
+                    {
+                        FlushLiteral(segments, literalBuf);
+                        segments.Add(ccSeg);
+                    }
                     break;
 
                 case '\\':
