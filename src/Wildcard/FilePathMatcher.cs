@@ -31,6 +31,11 @@ public sealed class FilePathMatcher
         /// File encoding. Null (default) uses UTF-8 with BOM detection.
         /// </summary>
         public Encoding? Encoding { get; init; }
+
+        /// <summary>
+        /// If true, pattern matching is case-insensitive.
+        /// </summary>
+        public bool IgnoreCase { get; init; }
     }
 
     private readonly WildcardPattern[] _includes;
@@ -114,16 +119,17 @@ public sealed class FilePathMatcher
         if (include.Length == 0) throw new ArgumentException("At least one include pattern is required.", nameof(include));
 
         var opts = options ?? Options.Default;
+        bool ic = opts.IgnoreCase;
         var includes = new WildcardPattern[include.Length];
         for (int i = 0; i < include.Length; i++)
-            includes[i] = WildcardPattern.Compile(include[i]);
+            includes[i] = WildcardPattern.Compile(include[i], ic);
 
         WildcardPattern[]? excludes = null;
         if (exclude is { Length: > 0 })
         {
             excludes = new WildcardPattern[exclude.Length];
             for (int i = 0; i < exclude.Length; i++)
-                excludes[i] = WildcardPattern.Compile(exclude[i]);
+                excludes[i] = WildcardPattern.Compile(exclude[i], ic);
         }
 
         return new FilePathMatcher(includes, excludes, opts);
