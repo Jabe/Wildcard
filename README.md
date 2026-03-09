@@ -220,3 +220,7 @@ This approach avoids the exponential worst-case that naive recursive implementat
 - **Minimum length gate** — lines shorter than the pattern's minimum possible match length are rejected before any decoding or matching.
 - **Parallel multi-file scanning** — multiple files are scanned concurrently via `Parallel.For`, with results merged preserving file order.
 - **Async streaming** — `ScanAsync` uses a bounded channel to stream matches as they are found.
+
+## Attribution
+
+This project was generated with the assistance of [Claude Opus 4.6](https://claude.ai) by [Anthropic](https://anthropic.com).
