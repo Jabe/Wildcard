@@ -4,7 +4,7 @@ namespace Wildcard;
 
 internal static class PatternCompiler
 {
-    public static Segment[] Compile(string pattern)
+    public static Segment[] Compile(string pattern, bool ignoreCase = false)
     {
         var segments = new List<Segment>();
         var literalBuf = new StringBuilder();
@@ -26,13 +26,19 @@ internal static class PatternCompiler
 
                 case '?':
                     FlushLiteral(segments, literalBuf);
-                    segments.Add(Segment.MakeQuestion());
+                    int qCount = 1;
+                    while (i + 1 < pattern.Length && pattern[i + 1] == '?')
+                    {
+                        qCount++;
+                        i++;
+                    }
+                    segments.Add(qCount == 1 ? Segment.MakeQuestion() : Segment.MakeQuestionRun(qCount));
                     i++;
                     break;
 
                 case '[':
                     i++;
-                    var ccSeg = ParseCharClass(pattern, ref i);
+                    var ccSeg = ParseCharClass(pattern, ref i, ignoreCase);
                     // Promote single-char non-negated class to literal (merges with adjacent)
                     if (!ccSeg.Negated && ccSeg.Ranges.Length == 1 && ccSeg.Ranges[0].Lo == ccSeg.Ranges[0].Hi)
                     {
@@ -75,7 +81,7 @@ internal static class PatternCompiler
         }
     }
 
-    private static Segment ParseCharClass(string pattern, ref int i)
+    private static Segment ParseCharClass(string pattern, ref int i, bool ignoreCase)
     {
         bool negated = false;
         var ranges = new List<CharRange>();
@@ -127,6 +133,6 @@ internal static class PatternCompiler
             }
         }
 
-        return Segment.MakeCharClass(ranges.ToArray(), negated);
+        return Segment.MakeCharClass(ranges.ToArray(), negated, ignoreCase);
     }
 }

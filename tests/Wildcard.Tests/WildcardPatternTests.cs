@@ -317,4 +317,68 @@ public class WildcardPatternTests
         Assert.False(p.IsMatch("file.csv.bak"));
         Assert.True(WildcardPattern.IsMatch("report*.csv", "report_2024.csv"));
     }
+
+    // ── Round 3 optimization tests ──
+
+    [Fact]
+    public void QuestionRun_MatchesExactCount()
+    {
+        Assert.True(WildcardPattern.IsMatch("a????z", "abcxyz"));
+        Assert.False(WildcardPattern.IsMatch("a????z", "abcz"));
+        Assert.False(WildcardPattern.IsMatch("a????z", "abcdefz"));
+    }
+
+    [Fact]
+    public void QuestionRun_WithStar()
+    {
+        Assert.True(WildcardPattern.IsMatch("???*", "abc"));
+        Assert.True(WildcardPattern.IsMatch("???*", "abcdef"));
+        Assert.False(WildcardPattern.IsMatch("???*", "ab"));
+    }
+
+    [Fact]
+    public void CaseInsensitive_CharClass_SearchValues()
+    {
+        var p = WildcardPattern.Compile("[aeiou]*", ignoreCase: true);
+        Assert.True(p.IsMatch("Apple"));
+        Assert.True(p.IsMatch("orange"));
+        Assert.False(p.IsMatch("Banana"));
+    }
+
+    [Fact]
+    public void Shape_PureLiteral()
+    {
+        var p = WildcardPattern.Compile("hello");
+        Assert.True(p.IsMatch("hello"));
+        Assert.False(p.IsMatch("hello!"));
+        Assert.False(p.IsMatch("hell"));
+    }
+
+    [Fact]
+    public void Shape_PrefixStarSuffix()
+    {
+        var p = WildcardPattern.Compile("report*.csv");
+        Assert.True(p.IsMatch("report_2024.csv"));
+        Assert.True(p.IsMatch("report.csv"));
+        Assert.False(p.IsMatch("report.txt"));
+        Assert.False(p.IsMatch("data.csv"));
+    }
+
+    [Fact]
+    public void Shape_StarContainsStar()
+    {
+        var p = WildcardPattern.Compile("*ERROR*");
+        Assert.True(p.IsMatch("some ERROR here"));
+        Assert.True(p.IsMatch("ERROR"));
+        Assert.False(p.IsMatch("no match"));
+    }
+
+    [Fact]
+    public void Shape_PrefixStarSuffix_Overlap()
+    {
+        var p = WildcardPattern.Compile("abc*bc");
+        Assert.True(p.IsMatch("abcbc"));
+        Assert.True(p.IsMatch("abcXbc"));
+        Assert.False(p.IsMatch("abcb"));
+    }
 }

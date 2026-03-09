@@ -11,12 +11,59 @@ public sealed class WildcardPattern
     private readonly Segment[] _segments;
     private readonly string _original;
     private readonly bool _ignoreCase;
+    private readonly PatternShape _shape;
+    private readonly string? _prefix;
+    private readonly string? _suffix;
+
+    private enum PatternShape : byte
+    {
+        General,
+        PureLiteral,
+        StarSuffix,
+        PrefixStar,
+        PrefixStarSuffix,
+        StarContainsStar,
+    }
 
     private WildcardPattern(string pattern, Segment[] segments, bool ignoreCase)
     {
         _original = pattern;
         _segments = segments;
         _ignoreCase = ignoreCase;
+        _shape = DetectShape(segments, out _prefix, out _suffix);
+    }
+
+    private static PatternShape DetectShape(Segment[] segments, out string? prefix, out string? suffix)
+    {
+        prefix = null;
+        suffix = null;
+
+        switch (segments.Length)
+        {
+            case 1 when segments[0].Kind == SegmentKind.Literal:
+                prefix = segments[0].Literal;
+                return PatternShape.PureLiteral;
+
+            case 2 when segments[0].Kind == SegmentKind.Star && segments[1].Kind == SegmentKind.Literal:
+                suffix = segments[1].Literal;
+                return PatternShape.StarSuffix;
+
+            case 2 when segments[0].Kind == SegmentKind.Literal && segments[1].Kind == SegmentKind.Star:
+                prefix = segments[0].Literal;
+                return PatternShape.PrefixStar;
+
+            case 3 when segments[0].Kind == SegmentKind.Literal && segments[1].Kind == SegmentKind.Star && segments[2].Kind == SegmentKind.Literal:
+                prefix = segments[0].Literal;
+                suffix = segments[2].Literal;
+                return PatternShape.PrefixStarSuffix;
+
+            case 3 when segments[0].Kind == SegmentKind.Star && segments[1].Kind == SegmentKind.Literal && segments[2].Kind == SegmentKind.Star:
+                prefix = segments[1].Literal;
+                return PatternShape.StarContainsStar;
+
+            default:
+                return PatternShape.General;
+        }
     }
 
     /// <summary>
@@ -26,7 +73,7 @@ public sealed class WildcardPattern
     public static WildcardPattern Compile(string pattern, bool ignoreCase = false)
     {
         ArgumentNullException.ThrowIfNull(pattern);
-        var segments = PatternCompiler.Compile(pattern);
+        var segments = PatternCompiler.Compile(pattern, ignoreCase);
         return new WildcardPattern(pattern, segments, ignoreCase);
     }
 
@@ -35,7 +82,41 @@ public sealed class WildcardPattern
     /// </summary>
     public bool IsMatch(ReadOnlySpan<char> input)
     {
-        return MatchCore(_segments.AsSpan(), input, _ignoreCase);
+        switch (_shape)
+        {
+            case PatternShape.PureLiteral:
+                return _ignoreCase
+                    ? input.Equals(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.SequenceEqual(_prefix);
+
+            case PatternShape.StarSuffix:
+                return _ignoreCase
+                    ? input.EndsWith(_suffix, StringComparison.OrdinalIgnoreCase)
+                    : input.EndsWith(_suffix);
+
+            case PatternShape.PrefixStar:
+                return _ignoreCase
+                    ? input.StartsWith(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.StartsWith(_prefix);
+
+            case PatternShape.PrefixStarSuffix:
+                if (input.Length < _prefix!.Length + _suffix!.Length) return false;
+                var startOk = _ignoreCase
+                    ? input.StartsWith(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.StartsWith(_prefix);
+                if (!startOk) return false;
+                return _ignoreCase
+                    ? input.EndsWith(_suffix, StringComparison.OrdinalIgnoreCase)
+                    : input.EndsWith(_suffix);
+
+            case PatternShape.StarContainsStar:
+                return _ignoreCase
+                    ? input.IndexOf(_prefix, StringComparison.OrdinalIgnoreCase) >= 0
+                    : input.IndexOf(_prefix) >= 0;
+
+            default:
+                return MatchCore(_segments.AsSpan(), input, _ignoreCase);
+        }
     }
 
     /// <summary>
@@ -100,6 +181,15 @@ public sealed class WildcardPattern
                         inputIdx++;
                         segIdx++;
                         continue;
+
+                    case SegmentKind.QuestionRun:
+                        if (input.Length - inputIdx >= seg.Count)
+                        {
+                            inputIdx += seg.Count;
+                            segIdx++;
+                            continue;
+                        }
+                        break;
 
                     case SegmentKind.Star:
                         starSegIdx = segIdx;
@@ -213,9 +303,10 @@ public sealed class WildcardPattern
     {
         bool found;
 
-        if (!ignoreCase && seg.SearchChars is not null)
+        if (seg.SearchChars is not null)
         {
             // SIMD-accelerated path using SearchValues<char>
+            // For case-insensitive patterns, SearchValues already contains both cases
             found = seg.SearchChars.Contains(c);
         }
         else
