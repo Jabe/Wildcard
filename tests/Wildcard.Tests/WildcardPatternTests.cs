@@ -289,4 +289,32 @@ public class WildcardPatternTests
         // *foo must match the LAST possible foo to consume all input
         Assert.True(WildcardPattern.IsMatch("*foo", "fooXfoo"));
     }
+
+    // ── Round 2 optimization tests ──
+
+    [Fact]
+    public void TrailingStar_ReturnsImmediately()
+    {
+        var p = WildcardPattern.Compile("foo*");
+        Assert.True(p.IsMatch("foo"));
+        Assert.True(p.IsMatch("foo" + new string('x', 50_000)));
+        Assert.False(p.IsMatch("bar"));
+    }
+
+    [Fact]
+    public void SingleCharClass_PromotedToLiteral()
+    {
+        Assert.True(WildcardPattern.IsMatch("[[]hello", "[hello"));
+        Assert.False(WildcardPattern.IsMatch("[[]hello", "xhello"));
+        Assert.True(WildcardPattern.IsMatch("[[]2024-03-15]*", "[2024-03-15] foo"));
+    }
+
+    [Fact]
+    public void EndsWith_TerminalStarLiteral()
+    {
+        var p = WildcardPattern.Compile("*.csv");
+        Assert.True(p.IsMatch("file.csv"));
+        Assert.False(p.IsMatch("file.csv.bak"));
+        Assert.True(WildcardPattern.IsMatch("report*.csv", "report_2024.csv"));
+    }
 }
