@@ -1,6 +1,6 @@
 # Wildcard
 
-A high-performance .NET 10 library for wildcard pattern matching. Provides a lightweight alternative to the full Regex engine, optimized for speed and low memory usage.
+A high-performance .NET 10 library for wildcard pattern matching. Provides a lightweight alternative to the full Regex engine, optimized for speed and zero allocations on the hot path.
 
 ## Requirements
 
@@ -31,47 +31,117 @@ pattern.IsMatch("fileAB.log"); // false
 // Case-insensitive matching
 WildcardPattern.IsMatch("HELLO", "hello", ignoreCase: true); // true
 
+// TryMatch — extract what each * captured
+var p = WildcardPattern.Compile("\\[*\\] * - *");
+if (p.TryMatch("[2024-03-15] ERROR - timeout", out var captures))
+{
+    // captures: ["2024-03-15", "ERROR", "timeout"]
+}
+
+// LINQ extensions
+string[] files = ["app.cs", "readme.md", "test.cs", "data.csv"];
+var csFiles = files.WhereMatch("*.cs").ToList();       // ["app.cs", "test.cs"]
+bool hasCsv = files.AnyMatch(WildcardPattern.Compile("*.csv")); // true
+string? first = files.FirstMatch(WildcardPattern.Compile("*.md")); // "readme.md"
+
+// Convert to Regex for interop
+Regex regex = WildcardPattern.Compile("*.csv").ToRegex();
+// regex.ToString() == "^.*\\.csv$"
+
 // Bulk filtering
 var pattern = WildcardPattern.Compile("*.cs");
-var files = new[] { "app.cs", "readme.md", "test.cs" };
 List<string> csharpFiles = WildcardSearch.FilterLines(pattern, files);
-// ["app.cs", "test.cs"]
 
 // Parallel bulk filtering for large datasets
 string[] results = WildcardSearch.FilterBulk(pattern, largeArray, parallel: true);
 ```
 
+## Benchmarks
+
+Measured on Apple M4 Pro, .NET 10.0, Arm64 RyuJIT AdvSIMD. Zero allocations for all single-match operations.
+
+### Pattern Matching — Wildcard vs Compiled Regex vs FileSystemName
+
+| Pattern | Input | Wildcard | Regex | FSName | Speedup vs Regex |
+|---------|-------|----------|-------|--------|-----------------|
+| `*.csv` | short (15 chars) | 1.3 ns | 13.0 ns | 4.5 ns | **10x** |
+| `*.csv` | long (74 chars) | 1.3 ns | 15.0 ns | 4.5 ns | **12x** |
+| `*.csv` | no match | 1.3 ns | 10.5 ns | 4.2 ns | **8x** |
+| `report*.csv` | short | 2.0 ns | 13.2 ns | 80.0 ns | **7x** |
+| `report_????.csv` | short | 5.2 ns | 8.8 ns | 39.1 ns | **2x** |
+| `[rs]*.*` | short | 7.5 ns | 13.2 ns | — | **2x** |
+| `*report*2024*` | short | 13.0 ns | 21.9 ns | 188.5 ns | **2x** |
+| `*report*2024*` | long | 15.2 ns | 25.6 ns | 994.3 ns | **2x** |
+
+### Real-World Patterns — Wildcard vs Compiled Regex
+
+| Pattern | Scenario | Wildcard | Regex | Speedup |
+|---------|----------|----------|-------|---------|
+| `v2.*` | version prefix | 0.7 ns | 8.3 ns | **11x** |
+| `[[]2024-03-15*` | log date prefix | 1.0 ns | 12.3 ns | **12x** |
+| `*@gmail.com` | email domain | 1.4 ns | 10.5 ns | **8x** |
+| `[AEIOU]*` (CI) | starts with vowel | 2.4 ns | 6.5 ns | **3x** |
+| `J* *Smith` (CI) | no match | 2.5 ns | 6.4 ns | **3x** |
+| `??? *` | 3-char first name | 3.2 ns | 6.4 ns | **2x** |
+| `SKU-*-BLUE-*` | product code | 9.5 ns | 10.3 ns | **1.1x** |
+| `J* *Smith` (CI) | match | 13.6 ns | 33.2 ns | **2x** |
+| `*@*.acme-corp.com` | corporate email | 13.7 ns | 38.5 ns | **3x** |
+| `*ERROR*timeout*` | log search (no match) | 19.2 ns | 27.9 ns | **1.5x** |
+| `*ERROR*timeout*` | log search (match) | 36.8 ns | 47.6 ns | **1.3x** |
+
+### Bulk Filtering — 10,000 Items
+
+| Method | Mean | Allocated |
+|--------|------|-----------|
+| Wildcard FilterLines | 33 µs | 33 KB |
+| Wildcard FilterBulk (parallel) | 61 µs | 174 KB |
+| FSName LINQ filter | 68 µs | 10 KB |
+| Regex LINQ filter | 198 µs | 11 KB |
+
 ## How It Works
 
 ### 1. Pattern Compilation
 
-`PatternCompiler.Compile` parses a pattern string into an array of `Segment` objects. Each segment is one of four types:
+`PatternCompiler.Compile` parses a pattern string into an array of `Segment` objects. Each segment is one of five types:
 
 - **Literal** — a fixed string to match exactly (e.g. `".cs"`)
 - **Star** — the `*` wildcard, matches any character sequence
 - **QuestionMark** — the `?` wildcard, matches exactly one character
-- **CharClass** — a character set like `[a-z]`, optionally negated
+- **QuestionRun** — consecutive `?` characters collapsed into a single segment with a count
+- **CharClass** — a character set like `[a-z]`, optionally negated, using `SearchValues<char>` for SIMD-accelerated lookups
 
-Consecutive `*` characters are collapsed into a single Star segment during compilation.
+Consecutive `*` characters are collapsed into a single Star segment during compilation. Single-character, non-negated character classes (e.g. `[[]`) are promoted to Literal segments and merged with adjacent literals.
 
-For example, the pattern `*.cs` compiles into `[Star, Literal(".cs")]`.
+### 2. Pattern Shape Specialization
 
-### 2. Matching Engine
+At compile time, common pattern shapes are detected and dispatched to optimized fast-paths that bypass the general matching engine entirely:
 
-`WildcardPattern.MatchCore` walks the segment array and the input string simultaneously using a backtracking algorithm:
+| Shape | Example | Fast-path |
+|-------|---------|-----------|
+| `PureLiteral` | `hello` | `SequenceEqual` |
+| `StarSuffix` | `*.csv` | `EndsWith` |
+| `PrefixStar` | `v2.*` | `StartsWith` |
+| `PrefixStarSuffix` | `report*.csv` | `StartsWith` + `EndsWith` |
+| `StarContainsStar` | `*ERROR*` | `IndexOf` |
+
+All other patterns fall through to the general backtracking engine.
+
+### 3. Matching Engine
+
+`MatchCore` walks the segment array and the input string simultaneously using a backtracking algorithm:
 
 - Two pointers track the current position in the segments and the input.
 - When a `*` segment is encountered, the engine records its position as a backtrack point and advances to the next segment.
 - If a subsequent segment fails to match, the engine backtracks to the last `*` position and tries consuming one more character from the input.
-- The match succeeds when all input is consumed and all segments (ignoring trailing `*`s) are satisfied.
+- **IndexOf acceleration** — when a `*` is followed by a literal, the engine uses `Span.IndexOf` to jump directly to the next occurrence instead of scanning character-by-character.
+- **EndsWith fast-path** — when a `*` is followed by the final literal segment, the engine checks `EndsWith` instead of scanning.
 
 This approach avoids the exponential worst-case that naive recursive implementations can hit.
 
-### 3. Performance
+### 4. Performance Techniques
 
 - **Zero-copy matching** — uses `ReadOnlySpan<char>` to avoid string allocations during matching.
 - **Aggressive inlining** — hot-path methods like `MatchLiteral` and `CharsEqual` use `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
-- **SIMD-accelerated character classes** — character class segments (`[a-z]`, `[abc]`) use `SearchValues<char>` for hardware-accelerated membership testing, leveraging vectorized instructions on supported hardware.
+- **SIMD-accelerated character classes** — `SearchValues<char>` provides hardware-accelerated membership testing. For case-insensitive patterns, both upper and lower case variants are expanded at compile time so the SIMD path works unconditionally.
+- **`ref readonly` struct access** — segments are accessed by reference in the hot loop to avoid copying the struct on each iteration.
 - **Parallel bulk operations** — `WildcardSearch.FilterBulk` processes arrays of 1024+ items in parallel using PLINQ with order preservation.
-- **SIMD-accelerated search** — `VectorizedIndexOf` delegates to the runtime's optimized `Span.IndexOf`, which uses SIMD instructions when available.
-- **.NET 10 runtime optimizations** — benefits from improved JIT tiered compilation, better bounds-check elimination for span operations, enhanced `SequenceEqual`/`IndexOf` vectorization, and improved GC performance.
