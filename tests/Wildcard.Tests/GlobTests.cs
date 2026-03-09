@@ -235,4 +235,43 @@ public class GlobTests : IDisposable
         Assert.Contains("src/deep/nested/File.cs", results);
         Assert.Equal(5, results.Count);
     }
+
+    // --- Absolute paths ---
+
+    [Fact]
+    public void AbsolutePath_LiteralFile()
+    {
+        var absPattern = Path.Combine(_tempDir, "root.txt").Replace('\\', '/');
+        var results = Wildcard.Glob.Match(absPattern).ToList();
+        Assert.Single(results);
+        Assert.Equal(Path.Combine(_tempDir, "root.txt"), results[0]);
+    }
+
+    [Fact]
+    public void AbsolutePath_WithWildcard()
+    {
+        var absPattern = Path.Combine(_tempDir, "src", "*.cs").Replace('\\', '/');
+        var results = Wildcard.Glob.Match(absPattern)
+            .Select(p => Path.GetFileName(p))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Assert.Equal(["Lib.cs", "Program.cs"], results);
+    }
+
+    [Fact]
+    public void AbsolutePath_WithDoubleStar()
+    {
+        var absPattern = Path.Combine(_tempDir, "**", "*.cs").Replace('\\', '/');
+        var results = Wildcard.Glob.Match(absPattern).ToList();
+        Assert.Equal(4, results.Count);
+    }
+
+    [Fact]
+    public void AbsolutePath_IgnoresBaseDirectory()
+    {
+        // When pattern is absolute, baseDirectory should be ignored
+        var absPattern = Path.Combine(_tempDir, "root.txt").Replace('\\', '/');
+        var results = Wildcard.Glob.Parse(absPattern).EnumerateMatches("/nonexistent").ToList();
+        Assert.Single(results);
+    }
 }

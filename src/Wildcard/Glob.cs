@@ -6,6 +6,7 @@ namespace Wildcard;
 public sealed class Glob
 {
     private readonly GlobSegment[] _segments;
+    private readonly string? _root; // non-null for absolute patterns
 
     private enum GlobSegmentKind : byte { Literal, Pattern, DoubleStar }
 
@@ -27,9 +28,10 @@ public sealed class Glob
         public static GlobSegment MakeDoubleStar() => new(GlobSegmentKind.DoubleStar, null, null);
     }
 
-    private Glob(GlobSegment[] segments)
+    private Glob(GlobSegment[] segments, string? root)
     {
         _segments = segments;
+        _root = root;
     }
 
     /// <summary>
@@ -40,6 +42,11 @@ public sealed class Glob
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
+        // Detect absolute path root before normalizing
+        string? root = null;
+        if (Path.IsPathRooted(pattern))
+            root = Path.GetPathRoot(pattern);
+
         // Normalize separators
         var normalized = pattern.Replace('\\', '/');
 
@@ -48,6 +55,10 @@ public sealed class Glob
 
         foreach (var part in parts)
         {
+            // Skip the drive letter segment on Windows (e.g. "C:") — it's captured in root
+            if (root is not null && segments.Count == 0 && part.Length == 2 && part[1] == ':')
+                continue;
+
             if (part == "**")
             {
                 // Collapse consecutive **
@@ -64,7 +75,7 @@ public sealed class Glob
             }
         }
 
-        return new Glob(segments.ToArray());
+        return new Glob(segments.ToArray(), root);
     }
 
     /// <summary>
@@ -72,7 +83,7 @@ public sealed class Glob
     /// </summary>
     public IEnumerable<string> EnumerateMatches(string? baseDirectory = null)
     {
-        var baseDir = baseDirectory ?? Directory.GetCurrentDirectory();
+        var baseDir = _root ?? baseDirectory ?? Directory.GetCurrentDirectory();
 
         if (_segments.Length == 0)
             yield break;
