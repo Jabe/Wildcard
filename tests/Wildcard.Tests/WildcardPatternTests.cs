@@ -381,4 +381,30 @@ public class WildcardPatternTests
         Assert.True(p.IsMatch("abcXbc"));
         Assert.False(p.IsMatch("abcb"));
     }
+
+    // ── MinLength tests ──
+
+    [Theory]
+    [InlineData("hello", 5)]
+    [InlineData("", 0)]
+    [InlineData("*", 0)]
+    [InlineData("?", 1)]
+    [InlineData("???", 3)]
+    [InlineData("*.csv", 4)]
+    [InlineData("report*.csv", 10)]
+    [InlineData("*ERROR*", 5)]
+    [InlineData("[abc]", 1)]
+    [InlineData("[a-z][0-9]", 2)]
+    [InlineData("src/*/test?.cs", 13)]
+    [InlineData("data_[0-9][0-9][0-9].csv", 12)]
+    [InlineData(@"hello\*", 6)]
+    [InlineData(@"test\[1\]", 7)]
+    [InlineData("*[!abc]*", 1)]
+    [InlineData("**", 0)]
+    [InlineData("a*b*c", 3)]
+    public void MinLength_ComputedCorrectly(string pattern, int expectedMinLength)
+    {
+        var p = WildcardPattern.Compile(pattern);
+        Assert.Equal(expectedMinLength, p.MinLength);
+    }
 }

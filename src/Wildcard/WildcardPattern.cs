@@ -27,12 +27,36 @@ public sealed class WildcardPattern
         StarContainsStar,
     }
 
+    /// <summary>
+    /// The minimum input length that could possibly match this pattern.
+    /// </summary>
+    public int MinLength { get; }
+
     private WildcardPattern(string pattern, Segment[] segments, bool ignoreCase)
     {
         _original = pattern;
         _segments = segments;
         _ignoreCase = ignoreCase;
         _shape = DetectShape(segments, out _prefix, out _suffix);
+        MinLength = ComputeMinLength(segments);
+    }
+
+    private static int ComputeMinLength(Segment[] segments)
+    {
+        int len = 0;
+        foreach (ref readonly var seg in segments.AsSpan())
+        {
+            len += seg.Kind switch
+            {
+                SegmentKind.Literal => seg.Literal.Length,
+                SegmentKind.QuestionMark => 1,
+                SegmentKind.QuestionRun => seg.Count,
+                SegmentKind.CharClass => 1,
+                SegmentKind.Star => 0,
+                _ => 0,
+            };
+        }
+        return len;
     }
 
     private static PatternShape DetectShape(Segment[] segments, out string? prefix, out string? suffix)
