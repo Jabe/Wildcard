@@ -101,6 +101,17 @@ public sealed class WildcardPattern
                         starSegIdx = segIdx;
                         starInputIdx = inputIdx;
                         segIdx++;
+                        // Fast-path: jump to first occurrence of the next literal
+                        if (segIdx < segments.Length && segments[segIdx].Kind == SegmentKind.Literal)
+                        {
+                            var nextLit = segments[segIdx].Literal.AsSpan();
+                            int found = ignoreCase
+                                ? input[inputIdx..].IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
+                                : input[inputIdx..].IndexOf(nextLit);
+                            if (found < 0) return false;
+                            inputIdx += found;
+                            starInputIdx = inputIdx;
+                        }
                         continue;
 
                     case SegmentKind.CharClass:
@@ -118,8 +129,23 @@ public sealed class WildcardPattern
             if (starSegIdx >= 0)
             {
                 segIdx = starSegIdx + 1;
-                starInputIdx++;
-                inputIdx = starInputIdx;
+                if (segIdx < segments.Length && segments[segIdx].Kind == SegmentKind.Literal)
+                {
+                    var nextLit = segments[segIdx].Literal.AsSpan();
+                    int searchFrom = starInputIdx + 1;
+                    if (searchFrom >= input.Length) return false;
+                    int found = ignoreCase
+                        ? input[searchFrom..].IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
+                        : input[searchFrom..].IndexOf(nextLit);
+                    if (found < 0) return false;
+                    starInputIdx = searchFrom + found;
+                    inputIdx = starInputIdx;
+                }
+                else
+                {
+                    starInputIdx++;
+                    inputIdx = starInputIdx;
+                }
                 continue;
             }
 

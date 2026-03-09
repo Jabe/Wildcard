@@ -241,4 +241,52 @@ public class WildcardPatternTests
         var inp = new string('b', 20);
         Assert.False(WildcardPattern.IsMatch(p, inp));
     }
+
+    // ── Star+Literal IndexOf optimization ──
+
+    [Fact]
+    public void StarLiteral_LongInput_Match()
+    {
+        var p = WildcardPattern.Compile("*.csv");
+        Assert.True(p.IsMatch(new string('x', 50_000) + ".csv"));
+    }
+
+    [Fact]
+    public void StarLiteral_LongInput_NoMatch_EarlyReturn()
+    {
+        var p = WildcardPattern.Compile("*.csv");
+        Assert.False(p.IsMatch(new string('x', 50_000) + ".txt"));
+    }
+
+    [Fact]
+    public void StarLiteral_MultiStar_LogLine()
+    {
+        Assert.True(WildcardPattern.IsMatch("*ERROR*timeout*",
+            "[2024-03-15 14:22:01] ERROR   Payment service timeout after 30s"));
+        Assert.False(WildcardPattern.IsMatch("*ERROR*timeout*",
+            "[2024-03-15 14:22:01] INFO    User login successful: user_id=4821"));
+    }
+
+    [Fact]
+    public void StarLiteral_CaseInsensitive()
+    {
+        var p = WildcardPattern.Compile("*error*", ignoreCase: true);
+        Assert.True(p.IsMatch("prefix ERROR suffix"));
+        Assert.False(p.IsMatch("no match here"));
+    }
+
+    [Fact]
+    public void StarLiteral_Backtrack_SecondOccurrenceMatches()
+    {
+        // First "foo" leads to failure; must backtrack to second "foo"
+        Assert.True(WildcardPattern.IsMatch("*foo*bar", "fooXXfoobar"));
+        Assert.False(WildcardPattern.IsMatch("*foo*bar", "fooXXfoobaz"));
+    }
+
+    [Fact]
+    public void StarLiteral_SingleStar_SecondOccurrenceIsTheMatch()
+    {
+        // *foo must match the LAST possible foo to consume all input
+        Assert.True(WildcardPattern.IsMatch("*foo", "fooXfoo"));
+    }
 }
