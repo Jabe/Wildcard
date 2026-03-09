@@ -144,6 +144,102 @@ public sealed class WildcardPattern
     public override string ToString() => _original;
 
     /// <summary>
+    /// Matches <paramref name="input"/> against this pattern and extracts the substrings matched by each * segment.
+    /// Returns true if the input matches. On match, <paramref name="captures"/> contains one entry per * in the pattern.
+    /// On failure, <paramref name="captures"/> is empty.
+    /// </summary>
+    public bool TryMatch(string input, out string[] captures)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        return TryMatch(input.AsSpan(), out captures);
+    }
+
+    /// <summary>
+    /// Matches <paramref name="input"/> against this pattern and extracts the substrings matched by each * segment.
+    /// </summary>
+    public bool TryMatch(ReadOnlySpan<char> input, out string[] captures)
+    {
+        switch (_shape)
+        {
+            case PatternShape.PureLiteral:
+                if (_ignoreCase
+                    ? input.Equals(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.SequenceEqual(_prefix))
+                {
+                    captures = [];
+                    return true;
+                }
+                captures = [];
+                return false;
+
+            case PatternShape.StarSuffix:
+                if (_ignoreCase
+                    ? input.EndsWith(_suffix, StringComparison.OrdinalIgnoreCase)
+                    : input.EndsWith(_suffix))
+                {
+                    captures = [input[..^_suffix!.Length].ToString()];
+                    return true;
+                }
+                captures = [];
+                return false;
+
+            case PatternShape.PrefixStar:
+                if (_ignoreCase
+                    ? input.StartsWith(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.StartsWith(_prefix))
+                {
+                    captures = [input[_prefix!.Length..].ToString()];
+                    return true;
+                }
+                captures = [];
+                return false;
+
+            case PatternShape.PrefixStarSuffix:
+                if (input.Length < _prefix!.Length + _suffix!.Length)
+                {
+                    captures = [];
+                    return false;
+                }
+                var psStartOk = _ignoreCase
+                    ? input.StartsWith(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.StartsWith(_prefix);
+                if (!psStartOk)
+                {
+                    captures = [];
+                    return false;
+                }
+                var psEndOk = _ignoreCase
+                    ? input.EndsWith(_suffix, StringComparison.OrdinalIgnoreCase)
+                    : input.EndsWith(_suffix);
+                if (!psEndOk)
+                {
+                    captures = [];
+                    return false;
+                }
+                captures = [input[_prefix.Length..^_suffix.Length].ToString()];
+                return true;
+
+            case PatternShape.StarContainsStar:
+                var idx = _ignoreCase
+                    ? input.IndexOf(_prefix, StringComparison.OrdinalIgnoreCase)
+                    : input.IndexOf(_prefix);
+                if (idx < 0)
+                {
+                    captures = [];
+                    return false;
+                }
+                captures = [
+                    input[..idx].ToString(),
+                    input[(idx + _prefix!.Length)..].ToString()
+                ];
+                return true;
+
+            default:
+                return MatchCoreWithCaptures(_segments.AsSpan(), input, _ignoreCase, out captures);
+        }
+    }
+
+    /// <summary>
     /// Converts this wildcard pattern into an equivalent <see cref="Regex"/>.
     /// Useful for interop with APIs that accept <see cref="Regex"/>.
     /// </summary>
@@ -242,10 +338,16 @@ public sealed class WildcardPattern
         => idx + 1 >= segments.Length;
 
     private static bool MatchCore(ReadOnlySpan<Segment> segments, ReadOnlySpan<char> input, bool ignoreCase)
+        => MatchCore(segments, input, ignoreCase, null, null, null);
+
+    private static bool MatchCore(
+        ReadOnlySpan<Segment> segments, ReadOnlySpan<char> input, bool ignoreCase,
+        int[]? starStarts, int[]? starEnds, int[]? segToStar)
     {
-        // dp-style backtracking: track the last '*' position
+        bool capturing = starStarts is not null;
         int segIdx = 0, inputIdx = 0;
         int starSegIdx = -1, starInputIdx = -1;
+        int activeStarIdx = -1;
 
         while (inputIdx < input.Length)
         {
@@ -256,14 +358,25 @@ public sealed class WildcardPattern
                 switch (seg.Kind)
                 {
                     case SegmentKind.Literal:
+                        int beforeLit = inputIdx;
                         if (MatchLiteral(seg.Literal.AsSpan(), input, ref inputIdx, ignoreCase))
                         {
+                            if (capturing && activeStarIdx >= 0)
+                            {
+                                starEnds![activeStarIdx] = beforeLit;
+                                activeStarIdx = -1;
+                            }
                             segIdx++;
                             continue;
                         }
                         break;
 
                     case SegmentKind.QuestionMark:
+                        if (capturing && activeStarIdx >= 0)
+                        {
+                            starEnds![activeStarIdx] = inputIdx;
+                            activeStarIdx = -1;
+                        }
                         inputIdx++;
                         segIdx++;
                         continue;
@@ -271,6 +384,11 @@ public sealed class WildcardPattern
                     case SegmentKind.QuestionRun:
                         if (input.Length - inputIdx >= seg.Count)
                         {
+                            if (capturing && activeStarIdx >= 0)
+                            {
+                                starEnds![activeStarIdx] = inputIdx;
+                                activeStarIdx = -1;
+                            }
                             inputIdx += seg.Count;
                             segIdx++;
                             continue;
@@ -278,12 +396,23 @@ public sealed class WildcardPattern
                         break;
 
                     case SegmentKind.Star:
+                        if (capturing)
+                        {
+                            if (activeStarIdx >= 0)
+                                starEnds![activeStarIdx] = inputIdx;
+                            activeStarIdx = segToStar![segIdx];
+                            starStarts![activeStarIdx] = inputIdx;
+                        }
                         starSegIdx = segIdx;
                         starInputIdx = inputIdx;
                         segIdx++;
                         // If this star is the last segment, it matches everything remaining
                         if (segIdx >= segments.Length)
+                        {
+                            if (capturing)
+                                starEnds![activeStarIdx] = input.Length;
                             return true;
+                        }
                         if (segments[segIdx].Kind == SegmentKind.Literal)
                         {
                             var nextLit = segments[segIdx].Literal.AsSpan();
@@ -292,9 +421,12 @@ public sealed class WildcardPattern
                             {
                                 int suffixStart = input.Length - nextLit.Length;
                                 if (suffixStart < inputIdx) return false;
-                                return ignoreCase
+                                bool endMatch = ignoreCase
                                     ? input[suffixStart..].Equals(nextLit, StringComparison.OrdinalIgnoreCase)
                                     : input[suffixStart..].SequenceEqual(nextLit);
+                                if (endMatch && capturing)
+                                    starEnds![activeStarIdx] = suffixStart;
+                                return endMatch;
                             }
                             // IndexOf fast-path: jump to first occurrence of the next literal
                             int found = ignoreCase
@@ -309,6 +441,11 @@ public sealed class WildcardPattern
                     case SegmentKind.CharClass:
                         if (MatchCharClass(seg, input[inputIdx], ignoreCase))
                         {
+                            if (capturing && activeStarIdx >= 0)
+                            {
+                                starEnds![activeStarIdx] = inputIdx;
+                                activeStarIdx = -1;
+                            }
                             inputIdx++;
                             segIdx++;
                             continue;
@@ -321,6 +458,8 @@ public sealed class WildcardPattern
             if (starSegIdx >= 0)
             {
                 segIdx = starSegIdx + 1;
+                if (capturing)
+                    activeStarIdx = segToStar![starSegIdx];
                 if (segIdx < segments.Length && segments[segIdx].Kind == SegmentKind.Literal)
                 {
                     var nextLit = segments[segIdx].Literal.AsSpan();
@@ -344,9 +483,21 @@ public sealed class WildcardPattern
             return false;
         }
 
+        // Close active star if it's at the end
+        if (capturing && activeStarIdx >= 0)
+            starEnds![activeStarIdx] = inputIdx;
+
         // Consume trailing stars
         while (segIdx < segments.Length && segments[segIdx].Kind == SegmentKind.Star)
+        {
+            if (capturing)
+            {
+                int idx = segToStar![segIdx];
+                starStarts![idx] = inputIdx;
+                starEnds![idx] = inputIdx;
+            }
             segIdx++;
+        }
 
         return segIdx == segments.Length;
     }
@@ -421,5 +572,41 @@ public sealed class WildcardPattern
         }
 
         return seg.Negated ? !found : found;
+    }
+
+    private static bool MatchCoreWithCaptures(ReadOnlySpan<Segment> segments, ReadOnlySpan<char> input, bool ignoreCase, out string[] captures)
+    {
+        // Count stars to size the captures array
+        int starCount = 0;
+        foreach (ref readonly var s in segments)
+        {
+            if (s.Kind == SegmentKind.Star) starCount++;
+        }
+
+        if (starCount == 0)
+        {
+            captures = [];
+            return MatchCore(segments, input, ignoreCase);
+        }
+
+        var starStarts = new int[starCount];
+        var starEnds = new int[starCount];
+
+        // Map segment index → star index
+        var segToStar = new int[segments.Length];
+        int si = 0;
+        for (int j = 0; j < segments.Length; j++)
+            segToStar[j] = segments[j].Kind == SegmentKind.Star ? si++ : -1;
+
+        if (!MatchCore(segments, input, ignoreCase, starStarts, starEnds, segToStar))
+        {
+            captures = [];
+            return false;
+        }
+
+        captures = new string[starCount];
+        for (int j = 0; j < starCount; j++)
+            captures[j] = input[starStarts[j]..starEnds[j]].ToString();
+        return true;
     }
 }
