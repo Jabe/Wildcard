@@ -1,3 +1,5 @@
+using System.Text;
+using System.Threading.Channels;
 using Wildcard;
 
 var (parsed, exitCode) = ParseArgs(args);
@@ -19,7 +21,7 @@ if (parsed.ContentPattern is null)
     return anyOutput ? 0 : 1;
 }
 
-// Content search — scan and print per-file for streaming output
+// Content search — parallel pipeline: glob produces file paths, workers scan in parallel
 var matcher = FilePathMatcher.Create(
     include: [parsed.ContentPattern],
     exclude: parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null,
@@ -27,23 +29,38 @@ var matcher = FilePathMatcher.Create(
 );
 
 string? highlightLiteral = ExtractHighlightLiteral(parsed.ContentPattern, parsed.IgnoreCase);
+var stdout = Console.Out;
 
-foreach (var file in Glob.Match(parsed.GlobPattern))
+// Producer: glob feeds file paths into a channel
+var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(64)
 {
-    var fileMatches = matcher.Scan(file);
-    if (fileMatches.Count == 0) continue;
+    SingleWriter = true,
+    SingleReader = false,
+    FullMode = BoundedChannelFullMode.Wait,
+});
+var producer = Task.Run(async () =>
+{
+    foreach (var file in Glob.Match(parsed.GlobPattern))
+        await fileChannel.Writer.WriteAsync(file);
+    fileChannel.Writer.Complete();
+});
 
-    if (anyOutput)
-        Console.WriteLine();
-    anyOutput = true;
+// Consumer: parallel workers scan files and write atomic output blocks
+var outputLock = new object();
+await Parallel.ForEachAsync(fileChannel.Reader.ReadAllAsync(), async (file, _) =>
+{
+    await Task.CompletedTask; // satisfy async signature
+    var fileMatches = matcher.Scan(file);
+    if (fileMatches.Count == 0) return;
 
     var relPath = Path.GetRelativePath(cwd, file);
-    if (useColor)
-        Console.WriteLine($"\x1b[35m{relPath}\x1b[0m");
-    else
-        Console.WriteLine(relPath);
-
     int width = fileMatches[^1].LineNumber.ToString().Length;
+
+    var sb = new StringBuilder();
+    if (useColor)
+        sb.AppendLine($"\x1b[35m{relPath}\x1b[0m");
+    else
+        sb.AppendLine(relPath);
 
     foreach (var match in fileMatches)
     {
@@ -51,17 +68,27 @@ foreach (var file in Glob.Match(parsed.GlobPattern))
 
         if (useColor)
         {
-            Console.Write($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
-            WriteHighlighted(match.Line, highlightLiteral, parsed.IgnoreCase);
-            Console.WriteLine();
+            sb.Append($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
+            AppendHighlighted(sb, match.Line, highlightLiteral, parsed.IgnoreCase);
+            sb.AppendLine();
         }
         else
         {
-            Console.WriteLine($"  {lineNum}: {match.Line}");
+            sb.AppendLine($"  {lineNum}: {match.Line}");
         }
     }
-}
 
+    // Atomic write — no interleaving between files
+    lock (outputLock)
+    {
+        if (anyOutput)
+            stdout.WriteLine();
+        anyOutput = true;
+        stdout.Write(sb);
+    }
+});
+
+await producer;
 return anyOutput ? 0 : 1;
 
 // --- Argument parsing ---
@@ -160,7 +187,7 @@ static string? ExtractHighlightLiteral(string pattern, bool ignoreCase)
     return null;
 }
 
-static void WriteHighlighted(string line, string? literal, bool ignoreCase)
+static void AppendHighlighted(StringBuilder sb, string line, string? literal, bool ignoreCase)
 {
     if (literal is not null)
     {
@@ -168,15 +195,15 @@ static void WriteHighlighted(string line, string? literal, bool ignoreCase)
         int idx = line.IndexOf(literal, comparison);
         if (idx >= 0)
         {
-            Console.Write(line.AsSpan(0, idx));
-            Console.Write("\x1b[1;31m");
-            Console.Write(line.AsSpan(idx, literal.Length));
-            Console.Write("\x1b[0m");
-            Console.Write(line.AsSpan(idx + literal.Length));
+            sb.Append(line.AsSpan(0, idx));
+            sb.Append("\x1b[1;31m");
+            sb.Append(line.AsSpan(idx, literal.Length));
+            sb.Append("\x1b[0m");
+            sb.Append(line.AsSpan(idx + literal.Length));
             return;
         }
     }
-    Console.Write(line);
+    sb.Append(line);
 }
 
 record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, bool IgnoreCase);
