@@ -10,10 +10,12 @@ bool useColor = !Console.IsOutputRedirected;
 var cwd = Directory.GetCurrentDirectory();
 bool anyOutput = false;
 
+var globOptions = parsed.NoIgnore ? null : new GlobOptions { RespectGitignore = true };
+
 // No content pattern — just list files as they're found
 if (parsed.ContentPattern is null)
 {
-    foreach (var file in Glob.Match(parsed.GlobPattern))
+    foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
     {
         Console.WriteLine(Path.GetRelativePath(cwd, file));
         anyOutput = true;
@@ -40,7 +42,7 @@ var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(64)
 });
 var producer = Task.Run(async () =>
 {
-    foreach (var file in Glob.Match(parsed.GlobPattern))
+    foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
         await fileChannel.Writer.WriteAsync(file);
     fileChannel.Writer.Complete();
 });
@@ -105,6 +107,7 @@ static (CliArgs?, int) ParseArgs(string[] args)
     string? content = null;
     var excludes = new List<string>();
     bool ignoreCase = false;
+    bool noIgnore = false;
 
     int i = 0;
     while (i < args.Length)
@@ -122,6 +125,9 @@ static (CliArgs?, int) ParseArgs(string[] args)
                 break;
             case "-i" or "--ignore-case":
                 ignoreCase = true;
+                break;
+            case "--no-ignore":
+                noIgnore = true;
                 break;
             default:
                 if (arg.StartsWith('-'))
@@ -152,7 +158,7 @@ static (CliArgs?, int) ParseArgs(string[] args)
         return (null, 1);
     }
 
-    return (new CliArgs(glob, content, excludes, ignoreCase), 0);
+    return (new CliArgs(glob, content, excludes, ignoreCase, noIgnore), 0);
 }
 
 static void PrintUsage()
@@ -167,6 +173,7 @@ static void PrintUsage()
         Options:
           -x, --exclude <pattern>   Exclude lines matching pattern (repeatable)
           -i, --ignore-case         Case-insensitive content matching
+          --no-ignore               Don't respect .gitignore files
           -h, --help                Show this help
 
         Examples:
@@ -206,4 +213,4 @@ static void AppendHighlighted(StringBuilder sb, string line, string? literal, bo
     sb.Append(line);
 }
 
-record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, bool IgnoreCase);
+record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, bool IgnoreCase, bool NoIgnore);
