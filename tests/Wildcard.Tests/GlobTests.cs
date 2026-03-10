@@ -274,4 +274,88 @@ public class GlobTests : IDisposable
         var results = Wildcard.Glob.Parse(absPattern).EnumerateMatches("/nonexistent").ToList();
         Assert.Single(results);
     }
+
+    // --- IsMatch (path matching without filesystem) ---
+
+    [Theory]
+    [InlineData("*.cs", "Program.cs", true)]
+    [InlineData("*.cs", "readme.md", false)]
+    [InlineData("*.cs", "src/Program.cs", false)] // * does not cross /
+    [InlineData("src/*.cs", "src/Program.cs", true)]
+    [InlineData("src/*.cs", "src/deep/File.cs", false)]
+    [InlineData("src/*.cs", "docs/readme.md", false)]
+    public void IsMatch_SingleStar(string pattern, string path, bool expected)
+    {
+        Assert.Equal(expected, Wildcard.Glob.IsMatch(pattern, path));
+    }
+
+    [Theory]
+    [InlineData("**/*.cs", "Program.cs", true)]
+    [InlineData("**/*.cs", "src/Program.cs", true)]
+    [InlineData("**/*.cs", "src/deep/nested/File.cs", true)]
+    [InlineData("**/*.cs", "readme.md", false)]
+    [InlineData("src/**/*.cs", "src/Program.cs", true)]
+    [InlineData("src/**/*.cs", "src/deep/nested/File.cs", true)]
+    [InlineData("src/**/*.cs", "docs/readme.md", false)]
+    [InlineData("**", "any/path/at/all.txt", true)]
+    [InlineData("**", "file.txt", true)]
+    public void IsMatch_DoubleStar(string pattern, string path, bool expected)
+    {
+        Assert.Equal(expected, Wildcard.Glob.IsMatch(pattern, path));
+    }
+
+    [Theory]
+    [InlineData("src/[PL]*.cs", "src/Program.cs", true)]
+    [InlineData("src/[PL]*.cs", "src/Lib.cs", true)]
+    [InlineData("src/[PL]*.cs", "src/data.json", false)]
+    public void IsMatch_CharacterClass(string pattern, string path, bool expected)
+    {
+        Assert.Equal(expected, Wildcard.Glob.IsMatch(pattern, path));
+    }
+
+    [Theory]
+    [InlineData("src/??b.cs", "src/Lib.cs", true)]
+    [InlineData("src/??b.cs", "src/Program.cs", false)]
+    public void IsMatch_QuestionMark(string pattern, string path, bool expected)
+    {
+        Assert.Equal(expected, Wildcard.Glob.IsMatch(pattern, path));
+    }
+
+    [Theory]
+    [InlineData("src\\*.cs", "src/Program.cs", true)]
+    [InlineData("src/*.cs", "src\\Program.cs", true)]
+    public void IsMatch_NormalizesBackslashes(string pattern, string path, bool expected)
+    {
+        Assert.Equal(expected, Wildcard.Glob.IsMatch(pattern, path));
+    }
+
+    [Fact]
+    public void IsMatch_ExactLiteral()
+    {
+        Assert.True(Wildcard.Glob.IsMatch("src/Program.cs", "src/Program.cs"));
+        Assert.False(Wildcard.Glob.IsMatch("src/Program.cs", "src/Lib.cs"));
+    }
+
+    [Fact]
+    public void IsMatch_InstanceMethod()
+    {
+        var glob = Wildcard.Glob.Parse("**/*.cs");
+        Assert.True(glob.IsMatch("src/Program.cs"));
+        Assert.False(glob.IsMatch("docs/readme.md"));
+    }
+
+    [Fact]
+    public void IsMatch_NullPath_Throws()
+    {
+        var glob = Wildcard.Glob.Parse("**");
+        Assert.Throws<ArgumentNullException>(() => glob.IsMatch(null!));
+    }
+
+    [Fact]
+    public void IsMatch_ConsecutiveDoubleStars()
+    {
+        // **/**/*.cs should behave same as **/*.cs
+        Assert.True(Wildcard.Glob.IsMatch("**/**/*.cs", "src/deep/File.cs"));
+        Assert.False(Wildcard.Glob.IsMatch("**/**/*.cs", "readme.md"));
+    }
 }

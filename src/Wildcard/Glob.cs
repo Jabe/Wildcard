@@ -191,6 +191,62 @@ public sealed class Glob
         return Parse(pattern).EnumerateMatches(baseDirectory, options);
     }
 
+    /// <summary>
+    /// Tests whether a relative path matches this glob pattern without touching the filesystem.
+    /// Path separators are normalized to forward slashes before matching.
+    /// </summary>
+    public bool IsMatch(string relativePath)
+    {
+        ArgumentNullException.ThrowIfNull(relativePath);
+        var parts = relativePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return IsMatchSegments(parts, 0, 0);
+    }
+
+    /// <summary>
+    /// Convenience: parse a glob pattern and test a relative path in one call.
+    /// </summary>
+    public static bool IsMatch(string pattern, string relativePath)
+    {
+        return Parse(pattern).IsMatch(relativePath);
+    }
+
+    private bool IsMatchSegments(string[] parts, int segmentIndex, int partIndex)
+    {
+        // All segments consumed — path must also be fully consumed
+        if (segmentIndex >= _segments.Length)
+            return partIndex >= parts.Length;
+
+        var seg = _segments[segmentIndex];
+
+        switch (seg.Kind)
+        {
+            case GlobSegmentKind.Literal:
+                if (partIndex >= parts.Length) return false;
+                if (!string.Equals(seg.LiteralName, parts[partIndex], StringComparison.OrdinalIgnoreCase))
+                    return false;
+                return IsMatchSegments(parts, segmentIndex + 1, partIndex + 1);
+
+            case GlobSegmentKind.Pattern:
+                if (partIndex >= parts.Length) return false;
+                if (!seg.Pattern!.IsMatch(parts[partIndex]))
+                    return false;
+                return IsMatchSegments(parts, segmentIndex + 1, partIndex + 1);
+
+            case GlobSegmentKind.DoubleStar:
+                // ** can match zero or more path segments
+                int nextSeg = segmentIndex + 1;
+                for (int i = partIndex; i <= parts.Length; i++)
+                {
+                    if (IsMatchSegments(parts, nextSeg, i))
+                        return true;
+                }
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
     private IEnumerable<string> MatchSegments(string currentDir, int segmentIndex, TraversalContext ctx)
     {
         // Check if we're entering a new git repo
