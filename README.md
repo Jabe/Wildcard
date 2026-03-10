@@ -100,7 +100,7 @@ foreach (var file in glob.EnumerateMatches("/my/project"))
 
 ### CLI Tool — `wcg`
 
-A command-line grep tool built on top of the library. Streams results as they're found.
+A command-line grep tool built on top of the library. Respects `.gitignore` by default, streams results as they're found.
 
 ```
 Usage: wcg <glob> [pattern] [options]
@@ -109,6 +109,7 @@ Usage: wcg <glob> [pattern] [options]
   wcg "**/*.log" "*ERROR*"               Search for ERROR in log files
   wcg "**/*.cs" "*TODO*" -x "*DONE*"     Search TODO, exclude DONE
   wcg "**/*.cs" "*TODO*" -i              Case-insensitive search
+  wcg "**/*.cs" --no-ignore              Include .gitignore'd files
 ```
 
 ## Benchmarks
