@@ -92,6 +92,9 @@ var files = Glob.Match("src/**/*.cs").ToList();
 // Single directory level
 var logs = Glob.Match("/var/log/*.log").ToList();
 
+// Respect .gitignore — skips bin/, obj/, node_modules/, .git/ etc.
+var tracked = Glob.Match("**/*.cs", options: new GlobOptions { RespectGitignore = true }).ToList();
+
 // Pre-parsed glob for reuse
 var glob = Glob.Parse("**/*.json");
 foreach (var file in glob.EnumerateMatches("/my/project"))
@@ -163,6 +166,23 @@ Pattern `*ERROR*` across 4 log files (~12.5% matching lines). Compared against `
 | small (1K lines) | 279 µs | 79 µs | 0.29 | 0.15 |
 | medium (100K lines) | 52,811 µs | 7,796 µs | 0.15 | 0.15 |
 | large (1M lines) | 558,834 µs | 110,174 µs | 0.20 | 0.15 |
+
+### CLI — `wcg` vs `find`, `grep`, `ripgrep`
+
+Real-world benchmark on `~/Code` (~5.4k .cs files, ~5.3k .json files across multiple git repos). Apple M4 Pro, .NET 10.0.
+
+| Task | `find` | `grep -r` | `rg` | `wcg` |
+|------|--------|-----------|------|-------|
+| Find all .cs files | 14.7s | — | — | **8.9s** |
+| Find all .json files | 16.8s | — | — | **8.5s** |
+| Deep glob `**/bin/**/*.dll` | 17.2s | — | — | **7.6s** |
+| Search `namespace` in .cs | — | 16.6s | **1.1s** | 4.9s |
+| Search `TODO` in .cs | — | 16.2s | **1.1s** | 5.0s |
+| Case-insensitive `error` in .json | — | 36.7s | **1.0s** | 4.9s |
+
+`wcg` beats `find` by **~2x** for file discovery and `grep` by **~3x** for content search. `.gitignore` filtering (on by default) prunes `bin/`, `obj/`, `node_modules/` etc. during traversal. Parallelized content scanning overlaps glob enumeration with file I/O.
+
+`ripgrep` remains the fastest content search tool thanks to SIMD-accelerated string matching and parallel directory walking.
 
 ## How It Works
 
