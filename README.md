@@ -105,14 +105,30 @@ foreach (var file in glob.EnumerateMatches("/my/project"))
 
 A command-line grep tool built on top of the library. Respects `.gitignore` by default, streams results as they're found.
 
-```
-Usage: wcg <glob> [pattern] [options]
+#### Install
 
-  wcg "src/**/*.cs"                     List matching files
-  wcg "**/*.log" "*ERROR*"               Search for ERROR in log files
-  wcg "**/*.cs" "*TODO*" -x "*DONE*"     Search TODO, exclude DONE
-  wcg "**/*.cs" "*TODO*" -i              Case-insensitive search
-  wcg "**/*.cs" --no-ignore              Include .gitignore'd files
+```bash
+dotnet tool install -g wcg
+```
+
+#### Update
+
+```bash
+dotnet tool update -g wcg
+```
+
+#### Usage
+
+```
+wcg <glob> [pattern] [options]
+
+  wcg "src/**/*.cs"                        List matching files
+  wcg "**/*.log" "*ERROR*"                  Search for ERROR in log files
+  wcg "**/*.cs" "*TODO*" -x "*DONE*"        Search TODO, exclude DONE
+  wcg "**/*.cs" "*TODO*" -i                 Case-insensitive search
+  wcg "**/*.log" "*ERROR*" --watch          Watch for new ERROR lines
+  wcg "**/*" "*class*" -X "*test*"          Search, skip test paths
+  wcg "**/*.cs" --no-ignore                 Include .gitignore'd files
 ```
 
 ## Benchmarks
