@@ -42,7 +42,6 @@ public sealed class FilePathMatcher
     private readonly WildcardPattern[]? _excludes;
     private readonly Encoding _encoding;
     private readonly int _minLineLength;
-    private readonly bool _ignoreCase;
 
     // Single-include fast path
     private readonly WildcardPattern? _singleInclude;
@@ -58,7 +57,6 @@ public sealed class FilePathMatcher
         _includes = includes;
         _excludes = excludes;
         _encoding = options.Encoding ?? Encoding.UTF8;
-        _ignoreCase = options.IgnoreCase;
         _singleInclude = includes.Length == 1 ? includes[0] : null;
         _minLineLength = ComputeMinLength(includes);
         InitBytePreFilter(_singleInclude, _encoding, out _bytePreFilterEnabled, out _bytePreFilterShape, out _bytePrefix, out _byteSuffix);
@@ -74,7 +72,7 @@ public sealed class FilePathMatcher
         bytePrefix = null;
         byteSuffix = null;
 
-        if (pattern is null || encoding.CodePage != 65001)
+        if (pattern is null || pattern.IgnoreCase || encoding.CodePage != 65001)
             return;
 
         var s = pattern.Shape;
@@ -450,14 +448,6 @@ public sealed class FilePathMatcher
 
     private void ScanBytes(string filePath, ReadOnlySpan<byte> data, List<LineMatch> results)
     {
-        // Buffer-first fast path: search the entire buffer for the needle bytes,
-        // then extract lines only around hits. Avoids per-line overhead for non-matching lines.
-        if (_bytePreFilterEnabled && _excludes is null)
-        {
-            ScanBytesFast(filePath, data, results);
-            return;
-        }
-
         var charBuffer = ArrayPool<char>.Shared.Rent(65536);
         try
         {
@@ -491,188 +481,6 @@ public sealed class FilePathMatcher
         }
     }
 
-    /// <summary>
-    /// Buffer-first search: searches the entire buffer for pattern bytes using SIMD-accelerated
-    /// IndexOf, then extracts lines only around hits. Much faster than line-first for sparse matches.
-    /// </summary>
-    private void ScanBytesFast(string filePath, ReadOnlySpan<byte> data, List<LineMatch> results, bool firstMatchOnly = false)
-    {
-        var needle = _bytePrefix ?? _byteSuffix!;
-        var charBuffer = ArrayPool<char>.Shared.Rent(65536);
-        try
-        {
-            int pos = 0;       // current search position in buffer
-            int lastPos = 0;   // position after the last processed line's \n
-            int lineNumber = 0;
-
-            while (pos < data.Length)
-            {
-                // Find next occurrence of the needle bytes in the buffer (SIMD-vectorized)
-                int hitIdx;
-                if (_ignoreCase)
-                    hitIdx = IndexOfIgnoreCase(data[pos..], needle);
-                else
-                    hitIdx = data[pos..].IndexOf(needle);
-                if (hitIdx < 0) break;
-                hitIdx += pos;
-
-                // Find the enclosing line boundaries
-                int lineStart = data[..hitIdx].LastIndexOf((byte)'\n');
-                lineStart = lineStart < 0 ? 0 : lineStart + 1;
-
-                // Skip if we already emitted this line (multiple hits on same line)
-                if (lineStart < lastPos && lastPos > 0)
-                {
-                    pos = hitIdx + 1;
-                    continue;
-                }
-
-                int afterHit = hitIdx + needle.Length;
-                int nlAfter = afterHit < data.Length ? data[afterHit..].IndexOf((byte)'\n') : -1;
-                int lineEnd = nlAfter < 0 ? data.Length : afterHit + nlAfter;
-
-                // Extract line bytes (excluding the \n)
-                var lineBytes = data[lineStart..lineEnd];
-
-                // Strip trailing \r
-                if (lineBytes.Length > 0 && lineBytes[^1] == (byte)'\r')
-                    lineBytes = lineBytes[..^1];
-
-                // Validate match based on pattern shape
-                bool valid = _bytePreFilterShape switch
-                {
-                    WildcardPattern.PatternShape.StarContainsStar => true, // needle found = match
-                    WildcardPattern.PatternShape.PureLiteral =>
-                        lineBytes.Length == needle.Length,
-                    WildcardPattern.PatternShape.PrefixStar =>
-                        hitIdx == lineStart, // needle must be at line start
-                    WildcardPattern.PatternShape.StarSuffix =>
-                        hitIdx + needle.Length == lineEnd || // needle at line end
-                        (lineEnd > 0 && data[lineEnd - 1] == (byte)'\r' && hitIdx + needle.Length == lineEnd - 1),
-                    WildcardPattern.PatternShape.PrefixStarSuffix =>
-                        hitIdx == lineStart && (_ignoreCase
-                            ? EndsWithIgnoreCase(lineBytes, _byteSuffix)
-                            : lineBytes.EndsWith(_byteSuffix)),
-                    _ => true,
-                };
-
-                if (!valid)
-                {
-                    // For PrefixStar/PureLiteral: skip to next line, not just next byte
-                    pos = lineEnd + 1;
-                    // Count skipped newlines
-                    lineNumber += data[lastPos..Math.Min(pos, data.Length)].Count((byte)'\n');
-                    lastPos = pos;
-                    continue;
-                }
-
-                // Count newlines between last position and current line start (SIMD-vectorized)
-                lineNumber += data[lastPos..lineStart].Count((byte)'\n') + 1;
-                lastPos = lineEnd + 1;
-
-                // Decode and emit
-                int charCount = DecodeToChars(lineBytes, charBuffer, out var bigBuffer);
-                try
-                {
-                    var span = bigBuffer is not null ? bigBuffer.AsSpan(0, charCount) : charBuffer.AsSpan(0, charCount);
-                    results.Add(new LineMatch(filePath, lineNumber, span.ToString()));
-                }
-                finally
-                {
-                    if (bigBuffer is not null) ArrayPool<char>.Shared.Return(bigBuffer);
-                }
-
-                if (firstMatchOnly) return;
-
-                // Advance past this line
-                pos = lineEnd + 1;
-            }
-        }
-        finally
-        {
-            ArrayPool<char>.Shared.Return(charBuffer);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool EqualsIgnoreCase(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-    {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++)
-        {
-            byte x = a[i], y = b[i];
-            if (x == y) continue;
-            byte xl = (byte)(x | 0x20), yl = (byte)(y | 0x20);
-            if (xl >= (byte)'a' && xl <= (byte)'z' && xl == yl) continue;
-            return false;
-        }
-        return true;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool StartsWithIgnoreCase(ReadOnlySpan<byte> data, ReadOnlySpan<byte> prefix)
-    {
-        if (data.Length < prefix.Length) return false;
-        return EqualsIgnoreCase(data[..prefix.Length], prefix);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool EndsWithIgnoreCase(ReadOnlySpan<byte> data, ReadOnlySpan<byte> suffix)
-    {
-        if (data.Length < suffix.Length) return false;
-        return EqualsIgnoreCase(data[^suffix.Length..], suffix);
-    }
-
-    /// <summary>
-    /// Case-insensitive byte search: finds the first occurrence of needle in data,
-    /// comparing ASCII letters case-insensitively.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int IndexOfIgnoreCase(ReadOnlySpan<byte> data, ReadOnlySpan<byte> needle)
-    {
-        if (needle.IsEmpty) return 0;
-        if (data.Length < needle.Length) return -1;
-
-        byte first = needle[0];
-        byte firstLower = (byte)(first | 0x20);
-        bool firstIsLetter = firstLower >= (byte)'a' && firstLower <= (byte)'z';
-
-        int searchLen = data.Length - needle.Length + 1;
-        int pos = 0;
-
-        while (pos < searchLen)
-        {
-            // Find next candidate for the first byte
-            int idx;
-            if (firstIsLetter)
-                idx = data[pos..].IndexOfAny(firstLower, (byte)(firstLower & ~0x20));
-            else
-                idx = data[pos..].IndexOf(first);
-            if (idx < 0) return -1;
-            pos += idx;
-            if (pos + needle.Length > data.Length) return -1;
-
-            // Verify remaining bytes
-            bool match = true;
-            for (int i = 1; i < needle.Length; i++)
-            {
-                byte a = data[pos + i];
-                byte b = needle[i];
-                if (a == b) continue;
-                byte al = (byte)(a | 0x20);
-                byte bl = (byte)(b | 0x20);
-                if (al >= (byte)'a' && al <= (byte)'z' && al == bl) continue;
-                match = false;
-                break;
-            }
-
-            if (match) return pos;
-            pos++;
-        }
-
-        return -1;
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ProcessLine(string filePath, ReadOnlySpan<byte> lineBytes, int lineNumber, char[] charBuffer, List<LineMatch> results)
     {
@@ -687,41 +495,20 @@ public sealed class FilePathMatcher
         // Byte-level pre-filter: avoid decoding non-matching lines
         if (_bytePreFilterEnabled)
         {
-            bool byteMatch;
-            if (_ignoreCase)
+            bool byteMatch = _bytePreFilterShape switch
             {
-                byteMatch = _bytePreFilterShape switch
-                {
-                    WildcardPattern.PatternShape.StarContainsStar =>
-                        IndexOfIgnoreCase(lineBytes, _bytePrefix) >= 0,
-                    WildcardPattern.PatternShape.PureLiteral =>
-                        lineBytes.Length == _bytePrefix!.Length && EqualsIgnoreCase(lineBytes, _bytePrefix),
-                    WildcardPattern.PatternShape.StarSuffix =>
-                        EndsWithIgnoreCase(lineBytes, _byteSuffix),
-                    WildcardPattern.PatternShape.PrefixStar =>
-                        StartsWithIgnoreCase(lineBytes, _bytePrefix),
-                    WildcardPattern.PatternShape.PrefixStarSuffix =>
-                        StartsWithIgnoreCase(lineBytes, _bytePrefix) && EndsWithIgnoreCase(lineBytes, _byteSuffix),
-                    _ => true,
-                };
-            }
-            else
-            {
-                byteMatch = _bytePreFilterShape switch
-                {
-                    WildcardPattern.PatternShape.StarContainsStar =>
-                        lineBytes.IndexOf(_bytePrefix) >= 0,
-                    WildcardPattern.PatternShape.PureLiteral =>
-                        lineBytes.Length == _bytePrefix!.Length && lineBytes.SequenceEqual(_bytePrefix),
-                    WildcardPattern.PatternShape.StarSuffix =>
-                        lineBytes.EndsWith(_byteSuffix),
-                    WildcardPattern.PatternShape.PrefixStar =>
-                        lineBytes.StartsWith(_bytePrefix),
-                    WildcardPattern.PatternShape.PrefixStarSuffix =>
-                        lineBytes.StartsWith(_bytePrefix) && lineBytes.EndsWith(_byteSuffix),
-                    _ => true,
-                };
-            }
+                WildcardPattern.PatternShape.StarContainsStar =>
+                    lineBytes.IndexOf(_bytePrefix) >= 0,
+                WildcardPattern.PatternShape.PureLiteral =>
+                    lineBytes.Length == _bytePrefix!.Length && lineBytes.SequenceEqual(_bytePrefix),
+                WildcardPattern.PatternShape.StarSuffix =>
+                    lineBytes.EndsWith(_byteSuffix),
+                WildcardPattern.PatternShape.PrefixStar =>
+                    lineBytes.StartsWith(_bytePrefix),
+                WildcardPattern.PatternShape.PrefixStarSuffix =>
+                    lineBytes.StartsWith(_bytePrefix) && lineBytes.EndsWith(_byteSuffix),
+                _ => true,
+            };
 
             if (!byteMatch) return;
 
