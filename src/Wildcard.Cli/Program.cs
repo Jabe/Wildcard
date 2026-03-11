@@ -134,22 +134,35 @@ static async Task<int> RunAsync(CliArgs parsed)
         ? new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase)
         : null;
 
-    // Producer: glob feeds file paths into a channel
-    var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(64)
+    // Producer: parallel glob feeds file paths into a channel
+    var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
     {
-        SingleWriter = true,
+        SingleWriter = false,
         SingleReader = false,
         FullMode = BoundedChannelFullMode.Wait,
     });
-    var producer = Task.Run(async () =>
+    var producer = Task.Run(() =>
     {
-        foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
+        try
         {
-            var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
-            if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-            await fileChannel.Writer.WriteAsync(file);
+            if (excludePathPatterns is not null)
+            {
+                // With path exclusions: use sequential glob to filter before writing
+                foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
+                {
+                    var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
+                    if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                    Glob.WriteBlocking(fileChannel.Writer, file);
+                }
+            }
+            else
+            {
+                // No path exclusions: use parallel glob walker
+                var glob = Glob.Parse(parsed.GlobPattern);
+                glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+            }
         }
-        fileChannel.Writer.Complete();
+        finally { fileChannel.Writer.Complete(); }
     });
 
     // Consumer: parallel workers scan files and write atomic output blocks

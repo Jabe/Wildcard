@@ -225,7 +225,7 @@ public sealed class Glob
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    private static void WriteBlocking(System.Threading.Channels.ChannelWriter<string> writer, string value)
+    public static void WriteBlocking(System.Threading.Channels.ChannelWriter<string> writer, string value)
     {
         while (!writer.TryWrite(value))
             writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult();
