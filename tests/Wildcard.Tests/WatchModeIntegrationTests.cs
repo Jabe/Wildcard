@@ -37,7 +37,7 @@ public class WatchModeIntegrationTests : IDisposable
 
         // Resolve the built DLL path
         var projDir = Path.GetDirectoryName(CliProjectPath)!;
-        CliDllPath = Path.Combine(projDir, "bin", "Debug", "net10.0", "Wildcard.Cli.dll");
+        CliDllPath = Path.Combine(projDir, "bin", "Debug", "net10.0", "wcg.dll");
     }
 
     public WatchModeIntegrationTests()
@@ -89,7 +89,11 @@ public class WatchModeIntegrationTests : IDisposable
             // Wait for initial scan to complete (watch message on stderr)
             await Task.Delay(1500);
 
-            File.AppendAllText(Path.Combine(_tempDir, "app.log"), "ERROR boom\n");
+            var logPath = Path.Combine(_tempDir, "app.log");
+            File.AppendAllText(logPath, "ERROR boom\n");
+            // Touch file to ensure FSW fires Changed event (macOS kqueue reliability)
+            await Task.Delay(200);
+            File.SetLastWriteTimeUtc(logPath, DateTime.UtcNow);
 
             await WaitFor(() => lines.Any(l => l.Contains("ERROR boom")));
         }
@@ -112,7 +116,11 @@ public class WatchModeIntegrationTests : IDisposable
             await WaitFor(() => lines.Count(l => l.Contains("hello world")) >= 2);
             int countBefore = lines.Count(l => l.Contains("hello world"));
 
-            File.AppendAllText(Path.Combine(_tempDir, "data.txt"), "hello world\n");
+            var dataPath = Path.Combine(_tempDir, "data.txt");
+            File.AppendAllText(dataPath, "hello world\n");
+            // Touch file to ensure FSW fires Changed event (macOS kqueue reliability)
+            await Task.Delay(200);
+            File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow);
 
             // Should see exactly 1 new match (multiset diff: 3 - 2 = 1)
             await WaitFor(() => lines.Count(l => l.Contains("hello world")) > countBefore);
