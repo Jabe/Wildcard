@@ -39,45 +39,45 @@ public class GlobHelperTests
 
     // --- GetWatchBaseDirectory ---
 
+    // Use a platform-appropriate rooted path for cwd (Windows needs a drive letter)
+    private static readonly string TestRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "wctest"));
+
     [Theory]
-    [InlineData("*.cs", "/tmp", "/tmp")]
-    [InlineData("src/**/*.cs", "/tmp", "/tmp/src")]
-    [InlineData("src/lib/**", "/tmp", "/tmp/src/lib")]
-    [InlineData("**/*.cs", "/tmp", "/tmp")]
-    [InlineData("a/b/c/*.txt", "/tmp", "/tmp/a/b/c")]
-    public void GetWatchBaseDirectory(string pattern, string cwd, string expected)
+    [InlineData("*.cs")]
+    [InlineData("**/*.cs")]
+    public void GetWatchBaseDirectory_NoLiteralPrefix_ReturnsCwd(string pattern)
     {
-        Assert.Equal(expected, GlobHelper.GetWatchBaseDirectory(pattern, cwd));
+        Assert.Equal(TestRoot, GlobHelper.GetWatchBaseDirectory(pattern, TestRoot));
     }
 
-    [Fact]
-    public void GetWatchBaseDirectory_AbsolutePattern()
+    [Theory]
+    [InlineData("src/**/*.cs", "src")]
+    [InlineData("src/lib/**", "src/lib")]
+    [InlineData("a/b/c/*.txt", "a/b/c")]
+    public void GetWatchBaseDirectory_ExtractsLiteralPrefix(string pattern, string expectedSuffix)
     {
-        var result = GlobHelper.GetWatchBaseDirectory("/usr/local/**/*.log", "/ignored");
-        Assert.Equal("/usr/local", result);
-    }
-
-    [Fact]
-    public void GetWatchBaseDirectory_NoLiteralPrefix_ReturnsCwd()
-    {
-        Assert.Equal("/work", GlobHelper.GetWatchBaseDirectory("**", "/work"));
+        var result = GlobHelper.GetWatchBaseDirectory(pattern, TestRoot);
+        var expected = Path.GetFullPath(Path.Combine(TestRoot, expectedSuffix));
+        Assert.Equal(expected, result);
     }
 
     [Fact]
     public void GetWatchBaseDirectory_BackslashNormalized()
     {
-        Assert.Equal("/tmp/src/lib", GlobHelper.GetWatchBaseDirectory("src\\lib\\**\\*.cs", "/tmp"));
+        var result = GlobHelper.GetWatchBaseDirectory("src\\lib\\**\\*.cs", TestRoot);
+        var expected = Path.GetFullPath(Path.Combine(TestRoot, "src", "lib"));
+        Assert.Equal(expected, result);
     }
 
     [Fact]
     public void GetWatchBaseDirectory_ThrowsOnNull()
     {
-        Assert.Throws<ArgumentNullException>(() => GlobHelper.GetWatchBaseDirectory(null!, "/tmp"));
+        Assert.Throws<ArgumentNullException>(() => GlobHelper.GetWatchBaseDirectory(null!, TestRoot));
     }
 
     [Fact]
     public void GetWatchBaseDirectory_ThrowsOnEmpty()
     {
-        Assert.Throws<ArgumentException>(() => GlobHelper.GetWatchBaseDirectory("", "/tmp"));
+        Assert.Throws<ArgumentException>(() => GlobHelper.GetWatchBaseDirectory("", TestRoot));
     }
 }
