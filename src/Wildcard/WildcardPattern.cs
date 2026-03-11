@@ -170,6 +170,9 @@ public sealed class WildcardPattern
         return compiled.IsMatch(input);
     }
 
+    /// <summary>
+    /// Returns the original pattern string used to compile this <see cref="WildcardPattern"/>.
+    /// </summary>
     public override string ToString() => _original;
 
     /// <summary>

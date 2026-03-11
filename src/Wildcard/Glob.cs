@@ -224,6 +224,9 @@ public sealed class Glob
         Parse(pattern).WriteMatchesToChannel(writer, options, cancellationToken);
     }
 
+    /// <summary>
+    /// Writes a value to the channel writer, blocking if the channel is full.
+    /// </summary>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public static void WriteBlocking(System.Threading.Channels.ChannelWriter<string> writer, string value)
     {

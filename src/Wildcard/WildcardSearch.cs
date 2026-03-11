@@ -3,8 +3,8 @@ using System.Runtime.CompilerServices;
 namespace Wildcard;
 
 /// <summary>
-/// Vectorized search: scans a haystack for substrings matching a wildcard pattern.
-/// Uses SIMD to accelerate candidate-position filtering before invoking the pattern matcher.
+/// Utilities for filtering and searching text with wildcard patterns.
+/// Includes line filtering, bulk matching, and substring position scanning.
 /// </summary>
 public static class WildcardSearch
 {
