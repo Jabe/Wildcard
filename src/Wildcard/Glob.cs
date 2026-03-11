@@ -192,6 +192,170 @@ public sealed class Glob
     }
 
     /// <summary>
+    /// Writes matching file paths to a channel writer using parallel directory walking.
+    /// Parallelizes subtree traversal at <c>**</c> boundaries for maximum throughput.
+    /// </summary>
+    public void WriteMatchesToChannel(System.Threading.Channels.ChannelWriter<string> writer,
+        GlobOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var baseDir = _root ?? Directory.GetCurrentDirectory();
+        if (_segments.Length == 0) return;
+
+        GitignoreFilter? filter = null;
+        string? gitRoot = null;
+        bool respectGitignore = options?.RespectGitignore == true;
+        if (respectGitignore)
+        {
+            gitRoot = GitignoreFilter.FindGitRoot(baseDir);
+            if (gitRoot is not null)
+                filter = GitignoreFilter.LoadFromGitRoot(gitRoot);
+        }
+
+        var ctx = new TraversalContext(respectGitignore, filter, gitRoot);
+        WriteMatchesSegments(baseDir, 0, ctx, writer, cancellationToken);
+    }
+
+    /// <summary>
+    /// Convenience: parse and write matches to a channel in one call.
+    /// </summary>
+    public static void MatchToChannel(string pattern, System.Threading.Channels.ChannelWriter<string> writer,
+        GlobOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        Parse(pattern).WriteMatchesToChannel(writer, options, cancellationToken);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static void WriteBlocking(System.Threading.Channels.ChannelWriter<string> writer, string value)
+    {
+        while (!writer.TryWrite(value))
+            writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private void WriteMatchesSegments(string currentDir, int segmentIndex, TraversalContext ctx,
+        System.Threading.Channels.ChannelWriter<string> writer, CancellationToken ct)
+    {
+        bool enteredRepo = ctx.TryEnterGitRepo(currentDir);
+        int addedRules = ctx.EnterDirectory(currentDir);
+        try
+        {
+            WriteMatchesSegmentsCore(currentDir, segmentIndex, ctx, writer, ct);
+        }
+        finally
+        {
+            ctx.LeaveDirectory(addedRules);
+            if (enteredRepo) ctx.LeaveGitRepo();
+        }
+    }
+
+    private void WriteMatchesSegmentsCore(string currentDir, int segmentIndex, TraversalContext ctx,
+        System.Threading.Channels.ChannelWriter<string> writer, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (segmentIndex >= _segments.Length)
+        {
+            if (File.Exists(currentDir))
+                WriteBlocking(writer,currentDir);
+            else if (Directory.Exists(currentDir))
+            {
+                foreach (var file in EnumerateFilesSafe(currentDir))
+                {
+                    if (ctx.IsIgnored(file, false)) continue;
+                    WriteBlocking(writer,file);
+                }
+            }
+            return;
+        }
+
+        var seg = _segments[segmentIndex];
+        bool isLast = segmentIndex == _segments.Length - 1;
+
+        switch (seg.Kind)
+        {
+            case GlobSegmentKind.Literal:
+            {
+                var next = Path.Combine(currentDir, seg.LiteralName!);
+                if (isLast)
+                {
+                    if (File.Exists(next) && !ctx.IsIgnored(next, false))
+                        WriteBlocking(writer,next);
+                }
+                else if (Directory.Exists(next) && !ctx.IsIgnored(next, true))
+                {
+                    WriteMatchesSegments(next, segmentIndex + 1, ctx, writer, ct);
+                }
+                break;
+            }
+
+            case GlobSegmentKind.Pattern:
+            {
+                if (isLast)
+                {
+                    foreach (var file in EnumerateFilesSafe(currentDir))
+                    {
+                        if (seg.Pattern!.IsMatch(Path.GetFileName(file.AsSpan())))
+                        {
+                            if (!ctx.IsIgnored(file, false))
+                                WriteBlocking(writer,file);
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (var dir in EnumerateDirectoriesSafe(currentDir))
+                    {
+                        if (seg.Pattern!.IsMatch(Path.GetFileName(dir.AsSpan())) && !ctx.IsIgnored(dir, true))
+                            WriteMatchesSegments(dir, segmentIndex + 1, ctx, writer, ct);
+                    }
+                }
+                break;
+            }
+
+            case GlobSegmentKind.DoubleStar:
+            {
+                int nextSeg = segmentIndex + 1;
+
+                // Zero levels: match next segment from current directory
+                WriteMatchesSegmentsCore(currentDir, nextSeg, ctx, writer, ct);
+
+                // One or more levels: parallelize subtree walks
+                var subDirs = EnumerateDirectoriesSafe(currentDir)
+                    .Where(d => !ctx.IsIgnored(d, true))
+                    .ToArray();
+
+                if (subDirs.Length == 0) break;
+
+                Parallel.ForEach(subDirs, subDir =>
+                {
+                    // Clone context for each subtree (each thread gets independent gitignore state)
+                    var localCtx = new TraversalContext(
+                        ctx.DiscoverGitignore,
+                        ctx.Filter?.Clone(),
+                        ctx.GitRoot);
+
+                    bool enteredRepo = localCtx.TryEnterGitRepo(subDir);
+                    int added = localCtx.EnterDirectory(subDir);
+                    try
+                    {
+                        // Match next segment from this subdir
+                        WriteMatchesSegmentsCore(subDir, nextSeg, localCtx, writer, ct);
+
+                        // Continue recursing deeper (sequential within each subtree)
+                        foreach (var deepDir in EnumerateAllSubdirectoriesFiltered(subDir, localCtx))
+                            WriteMatchesSegmentsCore(deepDir, nextSeg, localCtx, writer, ct);
+                    }
+                    finally
+                    {
+                        localCtx.LeaveDirectory(added);
+                        if (enteredRepo) localCtx.LeaveGitRepo();
+                    }
+                });
+                break;
+            }
+        }
+    }
+
+    /// <summary>
     /// Tests whether a relative path matches this glob pattern without touching the filesystem.
     /// Path separators are normalized to forward slashes before matching.
     /// </summary>

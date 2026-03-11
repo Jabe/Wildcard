@@ -209,5 +209,15 @@ public sealed class GitignoreFilter
         return null;
     }
 
+    /// <summary>
+    /// Creates a shallow clone of this filter. Rules are shared (immutable records), list is copied.
+    /// </summary>
+    internal GitignoreFilter Clone()
+    {
+        var clone = new GitignoreFilter { _gitRoot = _gitRoot };
+        clone._rules.AddRange(_rules);
+        return clone;
+    }
+
     private sealed record IgnoreRule(WildcardPattern? FullPathPattern, WildcardPattern? BasenamePattern, bool Negated, bool DirectoryOnly);
 }
