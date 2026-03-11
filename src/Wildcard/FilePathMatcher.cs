@@ -175,24 +175,7 @@ public sealed class FilePathMatcher
 
             var data = fileSpan[bomOffset..];
 
-            // Fast path: byte-level buffer search (no need to extract lines)
-            if (_bytePreFilterEnabled && _excludes is null)
-            {
-                var needle = _bytePrefix ?? _byteSuffix!;
-                if (_bytePreFilterShape == WildcardPattern.PatternShape.StarContainsStar)
-                {
-                    // Just check if the needle exists anywhere in the buffer
-                    return _ignoreCase
-                        ? IndexOfIgnoreCase(data, needle) >= 0
-                        : data.IndexOf(needle) >= 0;
-                }
-                // For other shapes, use ScanBytesFast but stop at first match
-                var results = new List<LineMatch>();
-                ScanBytesFast(filePath, data, results, firstMatchOnly: true);
-                return results.Count > 0;
-            }
-
-            // Fall back to line-by-line scan, stop at first match
+            // Line-by-line scan, stop at first match
             var charBuffer = ArrayPool<char>.Shared.Rent(65536);
             try
             {
@@ -446,6 +429,11 @@ public sealed class FilePathMatcher
         }
     }
 
+    // Note: a buffer-first (search-first) approach was tried here — searching the entire mmap'd
+    // buffer for needle bytes via SIMD IndexOf, then extracting lines only around hits. It was
+    // reverted because filesystem I/O (~3.4s) dominates wall time, making the scanning strategy
+    // difference unmeasurable. The existing byte pre-filter in ProcessLine already avoids decoding
+    // non-matching lines, which captures most of the benefit with far less complexity.
     private void ScanBytes(string filePath, ReadOnlySpan<byte> data, List<LineMatch> results)
     {
         var charBuffer = ArrayPool<char>.Shared.Rent(65536);
