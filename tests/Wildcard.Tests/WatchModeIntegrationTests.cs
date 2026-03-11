@@ -63,7 +63,11 @@ public class WatchModeIntegrationTests : IDisposable
         {
             await WaitFor(() => lines.Any(l => l.Contains("a.cs")));
 
-            File.WriteAllText(Path.Combine(_tempDir, "b.cs"), "class B {}");
+            var bPath = Path.Combine(_tempDir, "b.cs");
+            File.WriteAllText(bPath, "class B {}");
+            // Touch file to ensure FSW fires Changed event (macOS kqueue reliability)
+            await Task.Delay(200);
+            File.SetLastWriteTimeUtc(bPath, DateTime.UtcNow);
 
             await WaitFor(() => lines.Any(l => l.Contains("b.cs")));
         }
