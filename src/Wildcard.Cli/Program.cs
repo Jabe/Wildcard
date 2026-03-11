@@ -7,6 +7,7 @@ if (parsed is null)
     return exitCode;
 
 bool useColor = !Console.IsOutputRedirected;
+int maxWidth = !Console.IsOutputRedirected ? Console.WindowWidth : 0;
 var cwd = Directory.GetCurrentDirectory();
 bool anyOutput = false;
 var stdout = Console.Out;
@@ -106,19 +107,21 @@ await Parallel.ForEachAsync(fileChannel.Reader.ReadAllAsync(), async (file, _) =
     else
         sb.AppendLine(relPath);
 
+    int availableWidth = maxWidth > 0 ? maxWidth - (2 + width + 2) : 0;
     foreach (var match in fileMatches)
     {
         var lineNum = match.LineNumber.ToString().PadLeft(width);
+        var lineText = TruncateLine(match.Line, availableWidth, highlightLiteral, parsed.IgnoreCase);
 
         if (useColor)
         {
             sb.Append($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
-            AppendHighlighted(sb, match.Line, highlightLiteral, parsed.IgnoreCase);
+            AppendHighlighted(sb, lineText, highlightLiteral, parsed.IgnoreCase);
             sb.AppendLine();
         }
         else
         {
-            sb.AppendLine($"  {lineNum}: {match.Line}");
+            sb.AppendLine($"  {lineNum}: {lineText}");
         }
     }
 
@@ -200,18 +203,20 @@ await RunWatchLoop(parsed, cwd, useColor, excludePathPatterns, (file) =>
             sb.AppendLine(relPath);
         }
 
+        int availableWidth = maxWidth > 0 ? maxWidth - (2 + width + 2) : 0;
         foreach (var match in freshMatches)
         {
             var lnStr = match.LineNumber.ToString().PadLeft(width);
+            var lineText = TruncateLine(match.Line, availableWidth, highlightLiteral, parsed.IgnoreCase);
             if (useColor)
             {
                 sb.Append($"  \x1b[32m{lnStr}\x1b[0m\x1b[36m:\x1b[0m ");
-                AppendHighlighted(sb, match.Line, highlightLiteral, parsed.IgnoreCase);
+                AppendHighlighted(sb, lineText, highlightLiteral, parsed.IgnoreCase);
                 sb.AppendLine();
             }
             else
             {
-                sb.AppendLine($"  {lnStr}: {match.Line}");
+                sb.AppendLine($"  {lnStr}: {lineText}");
             }
         }
 
@@ -342,21 +347,119 @@ static string? ExtractHighlightLiteral(string pattern, bool ignoreCase)
 
 static void AppendHighlighted(StringBuilder sb, string line, string? literal, bool ignoreCase)
 {
-    if (literal is not null)
+    if (literal is null) { sb.Append(line); return; }
+    var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    int pos = 0;
+    while (pos < line.Length)
     {
+        int idx = line.IndexOf(literal, pos, comparison);
+        if (idx < 0) { sb.Append(line.AsSpan(pos)); break; }
+        sb.Append(line.AsSpan(pos, idx - pos));
+        sb.Append("\x1b[1;31m");
+        sb.Append(line.AsSpan(idx, literal.Length));
+        sb.Append("\x1b[0m");
+        pos = idx + literal.Length;
+    }
+}
+
+static string TruncateLine(string line, int availableWidth, string? highlightLiteral, bool ignoreCase)
+{
+    if (availableWidth <= 0 || line.Length <= availableWidth)
+        return line;
+
+    // Find all match positions
+    var matchIndices = new List<int>();
+    int matchLen = 0;
+    if (highlightLiteral is not null)
+    {
+        matchLen = highlightLiteral.Length;
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        int idx = line.IndexOf(literal, comparison);
-        if (idx >= 0)
+        int pos = 0;
+        while (pos <= line.Length - matchLen)
         {
-            sb.Append(line.AsSpan(0, idx));
-            sb.Append("\x1b[1;31m");
-            sb.Append(line.AsSpan(idx, literal.Length));
-            sb.Append("\x1b[0m");
-            sb.Append(line.AsSpan(idx + literal.Length));
-            return;
+            int idx = line.IndexOf(highlightLiteral, pos, comparison);
+            if (idx < 0) break;
+            matchIndices.Add(idx);
+            pos = idx + matchLen;
         }
     }
-    sb.Append(line);
+
+    // No matches — truncate from the right
+    if (matchIndices.Count == 0)
+        return string.Concat(line.AsSpan(0, availableWidth - 1), "…");
+
+    // Determine how many matches we can show (min 20 chars per snippet)
+    int showCount = matchIndices.Count;
+    while (showCount > 1)
+    {
+        int ellipses = showCount + 1; // leading + between + trailing (worst case)
+        int perMatch = (availableWidth - ellipses) / showCount;
+        if (perMatch >= 20) break;
+        showCount--;
+    }
+
+    // Build snippet spans centered on each match, then merge overlapping ones
+    int totalEllipses = showCount + 1;
+    int perSnippet = (availableWidth - totalEllipses) / showCount;
+
+    // Calculate raw spans
+    var spans = new List<(int Start, int End)>(showCount);
+    for (int i = 0; i < showCount; i++)
+    {
+        int center = matchIndices[i] + matchLen / 2;
+        int start = center - perSnippet / 2;
+        int end = start + perSnippet;
+        spans.Add((start, end));
+    }
+
+    // Merge overlapping or adjacent spans
+    var merged = new List<(int Start, int End)> { spans[0] };
+    for (int i = 1; i < spans.Count; i++)
+    {
+        var last = merged[^1];
+        if (spans[i].Start <= last.End + 1)
+            merged[^1] = (last.Start, Math.Max(last.End, spans[i].End));
+        else
+            merged.Add(spans[i]);
+    }
+
+    // Redistribute width after merging (fewer ellipsis separators needed)
+    if (merged.Count < showCount)
+    {
+        int newEllipses = merged.Count + 1;
+        int extraChars = (totalEllipses - newEllipses);
+        // Spread extra chars across merged spans
+        int perExtra = extraChars / merged.Count;
+        for (int i = 0; i < merged.Count; i++)
+        {
+            var (s, e) = merged[i];
+            merged[i] = (s - perExtra / 2, e + (perExtra - perExtra / 2));
+        }
+    }
+
+    // Clamp all spans to line bounds
+    for (int i = 0; i < merged.Count; i++)
+    {
+        var (s, e) = merged[i];
+        if (s < 0) { e -= s; s = 0; }
+        if (e > line.Length) { s -= (e - line.Length); e = line.Length; s = Math.Max(0, s); }
+        merged[i] = (s, e);
+    }
+
+    // Build output
+    var sb = new StringBuilder(availableWidth + 4);
+    for (int i = 0; i < merged.Count; i++)
+    {
+        var (s, e) = merged[i];
+        bool needLeading = (i == 0 && s > 0) || i > 0;
+        bool needTrailing = (i == merged.Count - 1 && e < line.Length) || i < merged.Count - 1;
+
+        if (needLeading) sb.Append('…');
+        sb.Append(line.AsSpan(s, e - s));
+        if (needTrailing && i == merged.Count - 1) sb.Append('…');
+    }
+
+    return sb.ToString();
 }
 
 static bool IsPathExcluded(string relPath, WildcardPattern[]? excludePathPatterns)
