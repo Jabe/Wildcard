@@ -520,6 +520,7 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
 
             foreach (var file in batch)
             {
+                if (file.Length > baseDir.Length + 4096) continue; // symlink cycle
                 if (!File.Exists(file)) continue;
                 var matchPath = Path.IsPathRooted(parsed.GlobPattern)
                     ? file.Replace('\\', '/')

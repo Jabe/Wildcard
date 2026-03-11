@@ -594,6 +594,7 @@ public sealed class Glob
         try { return Directory.EnumerateFiles(directory); }
         catch (UnauthorizedAccessException) { return []; }
         catch (DirectoryNotFoundException) { return []; }
+        catch (PathTooLongException) { return []; } // symlink cycle
     }
 
     private static IEnumerable<string> EnumerateDirectoriesSafe(string directory)
@@ -601,6 +602,7 @@ public sealed class Glob
         try { return Directory.EnumerateDirectories(directory); }
         catch (UnauthorizedAccessException) { return []; }
         catch (DirectoryNotFoundException) { return []; }
+        catch (PathTooLongException) { return []; } // symlink cycle
     }
 
     private static IEnumerable<string> EnumerateAllDirectoriesSafe(string directory)
@@ -608,5 +610,6 @@ public sealed class Glob
         try { return Directory.EnumerateDirectories(directory, "*", SearchOption.AllDirectories); }
         catch (UnauthorizedAccessException) { return []; }
         catch (DirectoryNotFoundException) { return []; }
+        catch (PathTooLongException) { return []; } // symlink cycle
     }
 }

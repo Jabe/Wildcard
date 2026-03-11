@@ -358,4 +358,26 @@ public class GlobTests : IDisposable
         Assert.True(Wildcard.Glob.IsMatch("**/**/*.cs", "src/deep/File.cs"));
         Assert.False(Wildcard.Glob.IsMatch("**/**/*.cs", "readme.md"));
     }
+
+    [Fact]
+    public void SymlinkCycle_Terminates()
+    {
+        if (OperatingSystem.IsWindows()) return; // symlinks need elevation on Windows
+
+        // Create a symlink cycle: tempdir/a/b/loop -> tempdir/a
+        var dirA = Path.Combine(_tempDir, "a");
+        var dirB = Path.Combine(_tempDir, "a", "b");
+        Directory.CreateDirectory(dirB);
+        File.WriteAllText(Path.Combine(dirA, "file.txt"), "hello");
+        File.WriteAllText(Path.Combine(dirB, "file2.txt"), "world");
+        Directory.CreateSymbolicLink(Path.Combine(dirB, "loop"), dirA);
+
+        // Should terminate despite the cycle, not throw or hang
+        var results = Wildcard.Glob.Match("**/*", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        Assert.Contains("a/file.txt", results);
+        Assert.Contains("a/b/file2.txt", results);
+    }
 }
