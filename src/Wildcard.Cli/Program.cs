@@ -9,6 +9,7 @@ var patternArg = new Argument<string?>("pattern") { Description = "Content searc
 var excludeOption = new Option<string[]>("-x", "--exclude") { Description = "Exclude lines matching pattern (repeatable)", AllowMultipleArgumentsPerToken = true };
 var excludePathOption = new Option<string[]>("-X", "--exclude-path") { Description = "Exclude files matching glob (repeatable)", AllowMultipleArgumentsPerToken = true };
 var ignoreCaseOption = new Option<bool>("-i", "--ignore-case") { Description = "Case-insensitive content matching" };
+var filesOnlyOption = new Option<bool>("-l", "--files-with-matches") { Description = "Only print file paths that contain matches" };
 var noIgnoreOption = new Option<bool>("--no-ignore") { Description = "Don't respect .gitignore files" };
 var watchOption = new Option<bool>("-w", "--watch") { Description = "Watch for changes after initial scan" };
 
@@ -19,6 +20,7 @@ var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, searc
     excludeOption,
     excludePathOption,
     ignoreCaseOption,
+    filesOnlyOption,
     noIgnoreOption,
     watchOption,
 };
@@ -31,6 +33,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         [.. parseResult.GetValue(excludeOption) ?? []],
         [.. parseResult.GetValue(excludePathOption) ?? []],
         parseResult.GetValue(ignoreCaseOption),
+        parseResult.GetValue(filesOnlyOption),
         parseResult.GetValue(noIgnoreOption),
         parseResult.GetValue(watchOption)
     );
@@ -88,6 +91,41 @@ static async Task<int> RunAsync(CliArgs parsed)
         exclude: parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null,
         options: parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null
     );
+
+    // Files-only mode: just print file paths that contain matches
+    if (parsed.FilesOnly)
+    {
+        var filesOnlyChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        {
+            SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
+        });
+        var filesOnlyProducer = Task.Run(() =>
+        {
+            try
+            {
+                var glob = Glob.Parse(parsed.GlobPattern);
+                glob.WriteMatchesToChannel(filesOnlyChannel.Writer, globOptions);
+            }
+            finally { filesOnlyChannel.Writer.Complete(); }
+        });
+        var filesOnlyLock = new object();
+        await Parallel.ForEachAsync(filesOnlyChannel.Reader.ReadAllAsync(), async (file, _) =>
+        {
+            await Task.CompletedTask;
+            var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
+            if (IsPathExcluded(relPath, excludePathPatterns)) return;
+            if (matcher.ContainsMatch(file))
+            {
+                lock (filesOnlyLock)
+                {
+                    stdout.WriteLine(Path.GetRelativePath(cwd, file));
+                    anyOutput = true;
+                }
+            }
+        });
+        await filesOnlyProducer;
+        return anyOutput ? 0 : 1;
+    }
 
     string? highlightLiteral = ExtractHighlightLiteral(parsed.ContentPattern, parsed.IgnoreCase);
 
@@ -490,4 +528,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool NoIgnore, bool Watch);
+record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool Watch);

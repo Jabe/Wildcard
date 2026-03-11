@@ -138,6 +138,105 @@ public sealed class FilePathMatcher
     }
 
     /// <summary>
+    /// Returns true if the file contains at least one matching line.
+    /// Stops at the first match for maximum performance.
+    /// </summary>
+    public bool ContainsMatch(string filePath)
+    {
+        var fileInfo = new FileInfo(filePath);
+        if (!fileInfo.Exists || fileInfo.Length == 0)
+            return false;
+
+        long fileLength = fileInfo.Length;
+        if (fileLength > int.MaxValue)
+        {
+            // For very large files, fall back to Scan and check count
+            var results = new List<LineMatch>();
+            ScanFileLargeMapped(filePath, fileLength, results);
+            return results.Count > 0;
+        }
+
+        return ContainsMatchMemoryMapped(filePath, fileLength);
+    }
+
+    private unsafe bool ContainsMatchMemoryMapped(string filePath, long fileLength)
+    {
+        using var mmf = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
+        using var accessor = mmf.CreateViewAccessor(0, fileLength, MemoryMappedFileAccess.Read);
+
+        byte* ptr = null;
+        accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+        try
+        {
+            ptr += accessor.PointerOffset;
+            var fileSpan = new ReadOnlySpan<byte>(ptr, (int)fileLength);
+
+            int bomOffset = 0;
+            if (fileSpan.Length >= 3 && fileSpan[0] == 0xEF && fileSpan[1] == 0xBB && fileSpan[2] == 0xBF)
+                bomOffset = 3;
+
+            var data = fileSpan[bomOffset..];
+
+            // Fast path: byte-level buffer search (no need to extract lines)
+            if (_bytePreFilterEnabled && _excludes is null)
+            {
+                var needle = _bytePrefix ?? _byteSuffix!;
+                if (_bytePreFilterShape == WildcardPattern.PatternShape.StarContainsStar)
+                {
+                    // Just check if the needle exists anywhere in the buffer
+                    return _ignoreCase
+                        ? IndexOfIgnoreCase(data, needle) >= 0
+                        : data.IndexOf(needle) >= 0;
+                }
+                // For other shapes, use ScanBytesFast but stop at first match
+                var results = new List<LineMatch>();
+                ScanBytesFast(filePath, data, results, firstMatchOnly: true);
+                return results.Count > 0;
+            }
+
+            // Fall back to line-by-line scan, stop at first match
+            var charBuffer = ArrayPool<char>.Shared.Rent(65536);
+            try
+            {
+                int lineNumber = 0;
+                int pos = 0;
+                var singleResult = new List<LineMatch>();
+
+                while (pos < data.Length)
+                {
+                    int nlIdx = data[pos..].IndexOf((byte)'\n');
+                    if (nlIdx < 0)
+                    {
+                        var lastLine = data[pos..];
+                        if (lastLine.Length > 0)
+                        {
+                            lineNumber++;
+                            ProcessLine(filePath, lastLine, lineNumber, charBuffer, singleResult);
+                            if (singleResult.Count > 0) return true;
+                        }
+                        break;
+                    }
+
+                    lineNumber++;
+                    var lineBytes = data.Slice(pos, nlIdx);
+                    ProcessLine(filePath, lineBytes, lineNumber, charBuffer, singleResult);
+                    if (singleResult.Count > 0) return true;
+                    pos += nlIdx + 1;
+                }
+                return false;
+            }
+            finally
+            {
+                ArrayPool<char>.Shared.Return(charBuffer);
+            }
+        }
+        finally
+        {
+            accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
+    }
+
+    /// <summary>
     /// Scans files on disk, returning all matching lines with file paths and line numbers.
     /// Files are processed in parallel.
     /// </summary>
