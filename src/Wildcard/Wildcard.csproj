@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Wildcard</RootNamespace>
     <PackageId>Wildcard</PackageId>
-    <Version>1.0.0</Version>
+    <Version>0.1.0</Version>
     <Authors>Jan Berdel</Authors>
     <Description>High-performance wildcard pattern matching, file system globbing, and content scanning. Supports *, ?, character classes, and ** recursive globs. Zero-allocation matching with memory-mapped file I/O.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
