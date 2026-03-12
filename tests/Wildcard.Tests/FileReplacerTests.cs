@@ -271,6 +271,9 @@ public class FileReplacerTests : IDisposable
     [Fact]
     public void Apply_ContinuesAfterWriteFailure_ReportsError()
     {
+        if (OperatingSystem.IsWindows())
+            return; // SetUnixFileMode not supported on Windows
+
         // Put the "bad" file in a subdirectory, then make that dir read-only
         // so the temp file write fails — but the file itself is still readable
         var lockedDir = Path.Combine(_tempDir, "locked");
