@@ -20,6 +20,11 @@ public sealed class FilePathMatcher
     public readonly record struct LineMatch(string FilePath, int LineNumber, string Line);
 
     /// <summary>
+    /// A line from a scanned file with context information.
+    /// </summary>
+    public readonly record struct ContextLine(string FilePath, int LineNumber, string Line, bool IsMatch);
+
+    /// <summary>
     /// Options for file scanning.
     /// </summary>
     public sealed record Options
@@ -330,6 +335,197 @@ public sealed class FilePathMatcher
             yield return match;
 
         await producer;
+    }
+
+    /// <summary>
+    /// Scans files returning matching lines with surrounding context lines.
+    /// Context lines have IsMatch=false; matched lines have IsMatch=true.
+    /// Overlapping context ranges are merged (no duplicate lines).
+    /// </summary>
+    public List<ContextLine> ScanWithContext(int beforeContext, int afterContext, params string[] filePaths)
+    {
+        ArgumentNullException.ThrowIfNull(filePaths);
+        if (filePaths.Length == 0) return [];
+
+        // Zero-context fast path: delegate to Scan and wrap
+        if (beforeContext <= 0 && afterContext <= 0)
+        {
+            var matches = Scan(filePaths);
+            var result = new List<ContextLine>(matches.Count);
+            foreach (var m in matches)
+                result.Add(new ContextLine(m.FilePath, m.LineNumber, m.Line, true));
+            return result;
+        }
+
+        if (filePaths.Length == 1)
+        {
+            return ScanFileWithContext(filePaths[0], beforeContext, afterContext);
+        }
+
+        // Parallel: per-file results, merge preserving file order
+        var perFile = new List<ContextLine>[filePaths.Length];
+        Parallel.For(0, filePaths.Length, i =>
+        {
+            perFile[i] = ScanFileWithContext(filePaths[i], beforeContext, afterContext);
+        });
+
+        int total = 0;
+        foreach (var list in perFile) total += list.Count;
+        var merged = new List<ContextLine>(total);
+        foreach (var list in perFile)
+            merged.AddRange(list);
+        return merged;
+    }
+
+    private unsafe List<ContextLine> ScanFileWithContext(string filePath, int beforeContext, int afterContext)
+    {
+        var fileInfo = new FileInfo(filePath);
+        if (!fileInfo.Exists || fileInfo.Length == 0)
+            return [];
+
+        long fileLength = fileInfo.Length;
+        if (fileLength > int.MaxValue)
+        {
+            // For very large files, fall back to Scan results wrapped as ContextLine
+            var matches = new List<LineMatch>();
+            ScanFileLargeMapped(filePath, fileLength, matches);
+            var result = new List<ContextLine>(matches.Count);
+            foreach (var m in matches)
+                result.Add(new ContextLine(m.FilePath, m.LineNumber, m.Line, true));
+            return result;
+        }
+
+        using var mmf = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
+        using var accessor = mmf.CreateViewAccessor(0, fileLength, MemoryMappedFileAccess.Read);
+
+        byte* ptr = null;
+        accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+        try
+        {
+            ptr += accessor.PointerOffset;
+            var fileSpan = new ReadOnlySpan<byte>(ptr, (int)fileLength);
+
+            int bomOffset = 0;
+            if (fileSpan.Length >= 3 && fileSpan[0] == 0xEF && fileSpan[1] == 0xBB && fileSpan[2] == 0xBF)
+                bomOffset = 3;
+
+            var data = fileSpan[bomOffset..];
+
+            // Pass 1: find all matching line numbers
+            var matchResults = new List<LineMatch>();
+            ScanBytes(filePath, data, matchResults);
+            if (matchResults.Count == 0)
+                return [];
+
+            var matchLineNumbers = new HashSet<int>(matchResults.Count);
+            foreach (var m in matchResults)
+                matchLineNumbers.Add(m.LineNumber);
+
+            // Compute merged context intervals
+            var intervals = MergeContextIntervals(matchResults, beforeContext, afterContext);
+
+            // Pass 2: collect all lines within context intervals
+            return CollectContextLines(filePath, data, matchLineNumbers, intervals);
+        }
+        finally
+        {
+            accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
+    }
+
+    private static List<(int Start, int End)> MergeContextIntervals(
+        List<LineMatch> matches, int beforeContext, int afterContext)
+    {
+        var intervals = new List<(int Start, int End)>(matches.Count);
+        foreach (var m in matches)
+        {
+            int start = Math.Max(1, m.LineNumber - beforeContext);
+            int end = m.LineNumber + afterContext;
+            intervals.Add((start, end));
+        }
+
+        // Merge overlapping/adjacent intervals
+        intervals.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var merged = new List<(int Start, int End)> { intervals[0] };
+        for (int i = 1; i < intervals.Count; i++)
+        {
+            var last = merged[^1];
+            if (intervals[i].Start <= last.End + 1)
+                merged[^1] = (last.Start, Math.Max(last.End, intervals[i].End));
+            else
+                merged.Add(intervals[i]);
+        }
+        return merged;
+    }
+
+    private List<ContextLine> CollectContextLines(
+        string filePath, ReadOnlySpan<byte> data,
+        HashSet<int> matchLineNumbers, List<(int Start, int End)> intervals)
+    {
+        var results = new List<ContextLine>();
+        var charBuffer = ArrayPool<char>.Shared.Rent(65536);
+        try
+        {
+            int lineNumber = 0;
+            int pos = 0;
+            int intervalIdx = 0;
+
+            while (pos < data.Length && intervalIdx < intervals.Count)
+            {
+                int nlIdx = data[pos..].IndexOf((byte)'\n');
+                ReadOnlySpan<byte> lineBytes;
+                bool isLastLine = false;
+
+                if (nlIdx < 0)
+                {
+                    lineBytes = data[pos..];
+                    if (lineBytes.Length == 0) break;
+                    isLastLine = true;
+                }
+                else
+                {
+                    lineBytes = data.Slice(pos, nlIdx);
+                }
+
+                lineNumber++;
+
+                // Skip past intervals we've passed
+                while (intervalIdx < intervals.Count && intervals[intervalIdx].End < lineNumber)
+                    intervalIdx++;
+
+                if (intervalIdx < intervals.Count &&
+                    lineNumber >= intervals[intervalIdx].Start &&
+                    lineNumber <= intervals[intervalIdx].End)
+                {
+                    // This line is within a context interval — decode it
+                    var stripped = lineBytes;
+                    if (stripped.Length > 0 && stripped[^1] == (byte)'\r')
+                        stripped = stripped[..^1];
+
+                    int charCount = DecodeToChars(stripped, charBuffer, out var bigBuffer);
+                    try
+                    {
+                        var lineChars = bigBuffer is not null
+                            ? bigBuffer.AsSpan(0, charCount)
+                            : charBuffer.AsSpan(0, charCount);
+                        results.Add(new ContextLine(filePath, lineNumber, lineChars.ToString(),
+                            matchLineNumbers.Contains(lineNumber)));
+                    }
+                    finally
+                    {
+                        if (bigBuffer is not null) ArrayPool<char>.Shared.Return(bigBuffer);
+                    }
+                }
+
+                if (isLastLine) break;
+                pos += nlIdx + 1;
+            }
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(charBuffer);
+        }
+        return results;
     }
 
     // --- Core: scan a single file using memory-mapped I/O ---

@@ -541,4 +541,138 @@ public class FilePathMatcherTests : IDisposable
 
         Assert.Equal(expected, actual);
     }
+
+    // --- ScanWithContext tests ---
+
+    [Fact]
+    public void ScanWithContext_BeforeContext_ReturnsLinesBeforeMatch()
+    {
+        // _logFile line 4 is ERROR, so before=2 should give lines 2,3,4
+        var matcher = FilePathMatcher.Create("*Payment service*");
+        var results = matcher.ScanWithContext(beforeContext: 2, afterContext: 0, _logFile);
+
+        Assert.True(results.Count >= 3);
+        var matchLine = results.Single(r => r.IsMatch);
+        Assert.Equal(4, matchLine.LineNumber);
+        Assert.Contains("Payment service", matchLine.Line);
+
+        // Context lines before the match
+        var contextBefore = results.Where(r => !r.IsMatch && r.LineNumber < matchLine.LineNumber).ToList();
+        Assert.Equal(2, contextBefore.Count);
+        Assert.Equal(2, contextBefore[0].LineNumber);
+        Assert.Equal(3, contextBefore[1].LineNumber);
+    }
+
+    [Fact]
+    public void ScanWithContext_AfterContext_ReturnsLinesAfterMatch()
+    {
+        // _logFile line 4 is ERROR (Payment), after=2 should give lines 4,5,6
+        var matcher = FilePathMatcher.Create("*Payment service*");
+        var results = matcher.ScanWithContext(beforeContext: 0, afterContext: 2, _logFile);
+
+        Assert.True(results.Count >= 3);
+        var matchLine = results.Single(r => r.IsMatch);
+        Assert.Equal(4, matchLine.LineNumber);
+
+        var contextAfter = results.Where(r => !r.IsMatch && r.LineNumber > matchLine.LineNumber).ToList();
+        Assert.Equal(2, contextAfter.Count);
+        Assert.Equal(5, contextAfter[0].LineNumber);
+        Assert.Equal(6, contextAfter[1].LineNumber);
+    }
+
+    [Fact]
+    public void ScanWithContext_OverlappingContextMerged()
+    {
+        // _logFile: ERROR on lines 4 and 6. With context=1, ranges [3,5] and [5,7] should merge to [3,7]
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1, _logFile);
+
+        // Should be contiguous lines 3-7 with no duplicates
+        var lineNumbers = results.Select(r => r.LineNumber).ToList();
+        for (int i = 1; i < lineNumbers.Count; i++)
+            Assert.Equal(lineNumbers[i - 1] + 1, lineNumbers[i]);
+
+        // No duplicate line numbers
+        Assert.Equal(lineNumbers.Count, lineNumbers.Distinct().Count());
+    }
+
+    [Fact]
+    public void ScanWithContext_IsMatchFlag_CorrectlySet()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1, _logFile);
+
+        var matchLines = results.Where(r => r.IsMatch).ToList();
+        var contextLines = results.Where(r => !r.IsMatch).ToList();
+
+        // All match lines should contain ERROR
+        foreach (var m in matchLines)
+            Assert.Contains("ERROR", m.Line);
+
+        // Context lines should NOT contain ERROR
+        foreach (var c in contextLines)
+            Assert.DoesNotContain("ERROR", c.Line);
+    }
+
+    [Fact]
+    public void ScanWithContext_NoContext_EquivalentToScan()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var scanResults = matcher.Scan(_logFile);
+        var contextResults = matcher.ScanWithContext(beforeContext: 0, afterContext: 0, _logFile);
+
+        Assert.Equal(scanResults.Count, contextResults.Count);
+        for (int i = 0; i < scanResults.Count; i++)
+        {
+            Assert.Equal(scanResults[i].LineNumber, contextResults[i].LineNumber);
+            Assert.Equal(scanResults[i].Line, contextResults[i].Line);
+            Assert.True(contextResults[i].IsMatch);
+        }
+    }
+
+    [Fact]
+    public void ScanWithContext_ContextNearFileStart_DoesNotGoNegative()
+    {
+        // _logFile line 1 is INFO. Before=5 should not produce negative line numbers.
+        var matcher = FilePathMatcher.Create("*Application started*");
+        var results = matcher.ScanWithContext(beforeContext: 5, afterContext: 0, _logFile);
+
+        Assert.All(results, r => Assert.True(r.LineNumber >= 1));
+        Assert.Contains(results, r => r.IsMatch && r.LineNumber == 1);
+    }
+
+    [Fact]
+    public void ScanWithContext_ContextNearFileEnd_DoesNotExceedFile()
+    {
+        // _logFile line 8 is INFO (last line). After=10 should not exceed file.
+        var matcher = FilePathMatcher.Create("*Request processed*");
+        var results = matcher.ScanWithContext(beforeContext: 0, afterContext: 10, _logFile);
+
+        Assert.Contains(results, r => r.IsMatch);
+        // All line numbers should be valid (no crash, no out-of-bounds)
+        Assert.All(results, r => Assert.True(r.LineNumber >= 1));
+    }
+
+    [Fact]
+    public void ScanWithContext_NonContiguousGroups_HaveGaps()
+    {
+        // _logFile: INFO on lines 1, 5, 8. With context=0, there should be gaps between them.
+        var matcher = FilePathMatcher.Create("*INFO*");
+        var results = matcher.ScanWithContext(beforeContext: 0, afterContext: 0, _logFile);
+
+        Assert.True(results.Count >= 3);
+        var lineNumbers = results.Select(r => r.LineNumber).ToList();
+
+        // There should be at least one gap (non-consecutive line numbers)
+        bool hasGap = false;
+        for (int i = 1; i < lineNumbers.Count; i++)
+        {
+            if (lineNumbers[i] != lineNumbers[i - 1] + 1)
+            {
+                hasGap = true;
+                break;
+            }
+        }
+        Assert.True(hasGap, "Expected non-contiguous groups with gaps in line numbers");
+    }
 }

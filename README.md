@@ -85,6 +85,17 @@ var matches = matcher.Scan("app.log");
 var matcher = FilePathMatcher.Create("*timeout*");
 await foreach (var match in matcher.ScanAsync(filePaths))
     Console.WriteLine(match.Line);
+
+// Context lines — like grep -C 3 (3 lines before and after each match)
+var matcher = FilePathMatcher.Create("*ERROR*");
+List<FilePathMatcher.ContextLine> results = matcher.ScanWithContext(
+    beforeContext: 3, afterContext: 3, "app.log");
+
+foreach (var line in results)
+{
+    var sep = line.IsMatch ? ":" : "-";
+    Console.WriteLine($"{line.LineNumber}{sep} {line.Line}");
+}
 ```
 
 ### File System Globbing
@@ -143,6 +154,9 @@ Options:
   --no-ignore               Don't respect .gitignore files
   -L, --follow              Follow symbolic links
   -w, --watch               Watch for changes after initial scan
+  -A, --after-context <N>   Show N lines after each match
+  -B, --before-context <N>  Show N lines before each match
+  -C, --context <N>         Show N lines before and after each match
 ```
 
 Examples:
@@ -158,6 +172,8 @@ wcg "**/*.log" ERROR --watch             # Watch for new ERROR lines
 wcg "**/*" class -X "*test*"             # Search, skip test paths
 wcg "**/*.cs" --no-ignore               # Include .gitignore'd files
 wcg "**/*.cs" -L                         # Follow symbolic links
+wcg "**/*.cs" TODO -C 3                  # Show 3 lines of context around matches
+wcg "**/*.log" ERROR -B 2 -A 5          # 2 lines before, 5 lines after each match
 
 # Plain words are auto-wrapped as *word* (substring match).
 # Use explicit wildcards for prefix/suffix/pattern matching:

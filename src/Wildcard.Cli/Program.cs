@@ -13,6 +13,9 @@ var filesOnlyOption = new Option<bool>("-l", "--files-with-matches") { Descripti
 var noIgnoreOption = new Option<bool>("--no-ignore") { Description = "Don't respect .gitignore files" };
 var followSymlinksOption = new Option<bool>("-L", "--follow") { Description = "Follow symbolic links" };
 var watchOption = new Option<bool>("-w", "--watch") { Description = "Watch for changes after initial scan" };
+var afterContextOption = new Option<int>("-A", "--after-context") { Description = "Show N lines after each match" };
+var beforeContextOption = new Option<int>("-B", "--before-context") { Description = "Show N lines before each match" };
+var contextOption = new Option<int>("-C", "--context") { Description = "Show N lines before and after each match" };
 
 var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, search content with wildcard patterns.")
 {
@@ -25,10 +28,16 @@ var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, searc
     noIgnoreOption,
     followSymlinksOption,
     watchOption,
+    afterContextOption,
+    beforeContextOption,
+    contextOption,
 };
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    int ctxC = parseResult.GetValue(contextOption);
+    int ctxB = parseResult.GetValue(beforeContextOption);
+    int ctxA = parseResult.GetValue(afterContextOption);
     var parsed = new CliArgs(
         parseResult.GetValue(globArg)!,
         [.. (parseResult.GetValue(patternArg) ?? []).Select(NormalizeContentPattern)],
@@ -38,7 +47,9 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         parseResult.GetValue(filesOnlyOption),
         parseResult.GetValue(noIgnoreOption),
         parseResult.GetValue(followSymlinksOption),
-        parseResult.GetValue(watchOption)
+        parseResult.GetValue(watchOption),
+        ctxB > 0 ? ctxB : ctxC,
+        ctxA > 0 ? ctxA : ctxC
     );
 
     return await RunAsync(parsed);
@@ -177,61 +188,141 @@ static async Task<int> RunAsync(CliArgs parsed)
     });
 
     // Consumer: parallel workers scan files and write atomic output blocks
+    bool hasContext = parsed.BeforeContext > 0 || parsed.AfterContext > 0;
     var outputLock = new object();
     await Parallel.ForEachAsync(fileChannel.Reader.ReadAllAsync(), async (file, _) =>
     {
         await Task.CompletedTask; // satisfy async signature
-        var fileMatches = matcher.Scan(file);
 
-        // Track matched line counts for watch mode (multiset for duplicate text)
-        if (parsed.Watch)
+        if (hasContext)
         {
-            var counts = new Dictionary<string, int>(fileMatches.Count);
-            foreach (var m in fileMatches)
+            var contextLines = matcher.ScanWithContext(parsed.BeforeContext, parsed.AfterContext, file);
+            if (contextLines.Count == 0) return;
+
+            // Track matched line counts for watch mode
+            if (parsed.Watch)
             {
-                counts.TryGetValue(m.Line, out int c);
-                counts[m.Line] = c + 1;
+                var counts = new Dictionary<string, int>();
+                foreach (var cl in contextLines)
+                {
+                    if (!cl.IsMatch) continue;
+                    counts.TryGetValue(cl.Line, out int c);
+                    counts[cl.Line] = c + 1;
+                }
+                lock (knownMatches!)
+                    knownMatches[file] = counts;
             }
-            lock (knownMatches!)
-                knownMatches[file] = counts;
-        }
 
-        if (fileMatches.Count == 0) return;
+            var relPath = Path.GetRelativePath(cwd, file);
+            int width = contextLines[^1].LineNumber.ToString().Length;
 
-        var relPath = Path.GetRelativePath(cwd, file);
-        int width = fileMatches[^1].LineNumber.ToString().Length;
-
-        var sb = new StringBuilder();
-        if (useColor)
-            sb.AppendLine($"\x1b[35m{relPath}\x1b[0m");
-        else
-            sb.AppendLine(relPath);
-
-        int availableWidth = maxWidth > 0 ? maxWidth - (2 + width + 2) : 0;
-        foreach (var match in fileMatches)
-        {
-            var lineNum = match.LineNumber.ToString().PadLeft(width);
-            var lineText = TruncateLine(match.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
-
+            var sb = new StringBuilder();
             if (useColor)
-            {
-                sb.Append($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
-                AppendHighlighted(sb, lineText, highlightLiterals, parsed.IgnoreCase);
-                sb.AppendLine();
-            }
+                sb.AppendLine($"\x1b[35m{relPath}\x1b[0m");
             else
+                sb.AppendLine(relPath);
+
+            int availableWidth = maxWidth > 0 ? maxWidth - (2 + width + 2) : 0;
+            for (int i = 0; i < contextLines.Count; i++)
             {
-                sb.AppendLine($"  {lineNum}: {lineText}");
+                // Insert group separator for non-contiguous lines
+                if (i > 0 && contextLines[i].LineNumber != contextLines[i - 1].LineNumber + 1)
+                {
+                    if (useColor)
+                        sb.AppendLine($"  \x1b[36m{"--".PadLeft(width)}\x1b[0m");
+                    else
+                        sb.AppendLine($"  {"--".PadLeft(width)}");
+                }
+
+                var cl = contextLines[i];
+                var lineNum = cl.LineNumber.ToString().PadLeft(width);
+
+                if (cl.IsMatch)
+                {
+                    var lineText = TruncateLine(cl.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
+                    if (useColor)
+                    {
+                        sb.Append($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
+                        AppendHighlighted(sb, lineText, highlightLiterals, parsed.IgnoreCase);
+                        sb.AppendLine();
+                    }
+                    else
+                    {
+                        sb.AppendLine($"  {lineNum}: {lineText}");
+                    }
+                }
+                else
+                {
+                    var lineText = TruncateLine(cl.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
+                    if (useColor)
+                        sb.AppendLine($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m-\x1b[0m {lineText}");
+                    else
+                        sb.AppendLine($"  {lineNum}- {lineText}");
+                }
+            }
+
+            lock (outputLock)
+            {
+                if (anyOutput)
+                    stdout.WriteLine();
+                anyOutput = true;
+                stdout.Write(sb);
             }
         }
-
-        // Atomic write — no interleaving between files
-        lock (outputLock)
+        else
         {
-            if (anyOutput)
-                stdout.WriteLine();
-            anyOutput = true;
-            stdout.Write(sb);
+            var fileMatches = matcher.Scan(file);
+
+            // Track matched line counts for watch mode (multiset for duplicate text)
+            if (parsed.Watch)
+            {
+                var counts = new Dictionary<string, int>(fileMatches.Count);
+                foreach (var m in fileMatches)
+                {
+                    counts.TryGetValue(m.Line, out int c);
+                    counts[m.Line] = c + 1;
+                }
+                lock (knownMatches!)
+                    knownMatches[file] = counts;
+            }
+
+            if (fileMatches.Count == 0) return;
+
+            var relPath = Path.GetRelativePath(cwd, file);
+            int width = fileMatches[^1].LineNumber.ToString().Length;
+
+            var sb = new StringBuilder();
+            if (useColor)
+                sb.AppendLine($"\x1b[35m{relPath}\x1b[0m");
+            else
+                sb.AppendLine(relPath);
+
+            int availableWidth = maxWidth > 0 ? maxWidth - (2 + width + 2) : 0;
+            foreach (var match in fileMatches)
+            {
+                var lineNum = match.LineNumber.ToString().PadLeft(width);
+                var lineText = TruncateLine(match.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
+
+                if (useColor)
+                {
+                    sb.Append($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
+                    AppendHighlighted(sb, lineText, highlightLiterals, parsed.IgnoreCase);
+                    sb.AppendLine();
+                }
+                else
+                {
+                    sb.AppendLine($"  {lineNum}: {lineText}");
+                }
+            }
+
+            // Atomic write — no interleaving between files
+            lock (outputLock)
+            {
+                if (anyOutput)
+                    stdout.WriteLine();
+                anyOutput = true;
+                stdout.Write(sb);
+            }
         }
     });
 
@@ -588,4 +679,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch);
+record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext);

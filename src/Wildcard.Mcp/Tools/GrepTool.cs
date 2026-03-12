@@ -20,7 +20,10 @@ public static class GrepTool
         [Description("Only return file paths that contain matches, not the matched lines (default: false)")] bool files_only = false,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
-        [Description("Maximum number of matched lines to return (default: 500)")] int limit = 500)
+        [Description("Maximum number of matched lines to return (default: 500)")] int limit = 500,
+        [Description("Lines to show before each match (default: 0)")] int before_context = 0,
+        [Description("Lines to show after each match (default: 0)")] int after_context = 0,
+        [Description("Lines to show before and after each match — shorthand for before_context + after_context (default: 0)")] int context = 0)
     {
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var globOptions = new GlobOptions
@@ -44,6 +47,12 @@ public static class GrepTool
 
         if (files_only)
             return RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit);
+
+        int resolvedBefore = before_context > 0 ? before_context : context;
+        int resolvedAfter = after_context > 0 ? after_context : context;
+
+        if (resolvedBefore > 0 || resolvedAfter > 0)
+            return RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter);
 
         return RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit);
     }
@@ -176,6 +185,117 @@ public static class GrepTool
                         written++;
                     }
                     matchCount += written;
+                }
+            }
+        });
+
+        producer.Wait();
+
+        if (!anyOutput)
+            return "No matches found.";
+
+        if (matchCount >= limit)
+            sb.AppendLine($"\n... results truncated at {limit} matches. Use a more specific pattern to narrow results.");
+
+        return sb.ToString();
+    }
+
+    private static string RunContentSearchWithContext(string pattern, string baseDir, GlobOptions globOptions,
+        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
+        int beforeContext, int afterContext)
+    {
+        var sb = new StringBuilder();
+        int matchCount = 0;
+        bool anyOutput = false;
+
+        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        {
+            SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
+        });
+
+        var producer = Task.Run(() =>
+        {
+            try
+            {
+                if (excludePathPatterns is not null)
+                {
+                    foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+                    {
+                        var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+                        if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                        Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
+                    }
+                }
+                else
+                {
+                    var glob = Wildcard.Glob.Parse(pattern);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                }
+            }
+            finally { fileChannel.Writer.Complete(); }
+        });
+
+        var outputLock = new object();
+        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
+        {
+            var contextLines = matcher.ScanWithContext(beforeContext, afterContext, file);
+            if (contextLines.Count == 0) return;
+
+            var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+            int width = contextLines[^1].LineNumber.ToString().Length;
+            int fileMatchCount = 0;
+            foreach (var cl in contextLines)
+                if (cl.IsMatch) fileMatchCount++;
+
+            var fileSb = new StringBuilder();
+            fileSb.AppendLine(relPath);
+
+            for (int i = 0; i < contextLines.Count; i++)
+            {
+                // Group separator for non-contiguous lines
+                if (i > 0 && contextLines[i].LineNumber != contextLines[i - 1].LineNumber + 1)
+                    fileSb.AppendLine($"  {"--".PadLeft(width)}");
+
+                var cl = contextLines[i];
+                var lineNum = cl.LineNumber.ToString().PadLeft(width);
+                var separator = cl.IsMatch ? ":" : "-";
+                fileSb.AppendLine($"  {lineNum}{separator} {cl.Line}");
+            }
+
+            lock (outputLock)
+            {
+                if (matchCount >= limit) return;
+
+                if (anyOutput)
+                    sb.AppendLine();
+                anyOutput = true;
+
+                int remaining = limit - matchCount;
+                if (fileMatchCount <= remaining)
+                {
+                    sb.Append(fileSb);
+                    matchCount += fileMatchCount;
+                }
+                else
+                {
+                    // Partial: include lines up to the match limit
+                    sb.AppendLine(relPath);
+                    int matchesWritten = 0;
+                    for (int i = 0; i < contextLines.Count; i++)
+                    {
+                        if (matchesWritten >= remaining) break;
+
+                        if (i > 0 && contextLines[i].LineNumber != contextLines[i - 1].LineNumber + 1)
+                            sb.AppendLine($"  {"--".PadLeft(width)}");
+
+                        var cl = contextLines[i];
+                        var lineNum = cl.LineNumber.ToString().PadLeft(width);
+                        var separator = cl.IsMatch ? ":" : "-";
+                        sb.AppendLine($"  {lineNum}{separator} {cl.Line}");
+
+                        if (cl.IsMatch) matchesWritten++;
+                    }
+                    matchCount += matchesWritten;
                 }
             }
         });
