@@ -121,6 +121,26 @@ foreach (var file in glob.EnumerateMatches("/my/project"))
     Console.WriteLine(file);
 ```
 
+### Find and Replace
+
+`FileReplacer` performs find-and-replace across files with dry-run preview, atomic writes, and encoding preservation.
+
+```csharp
+// Preview replacements (no files modified)
+var results = FileReplacer.Preview(filePaths, "oldMethod", "newMethod");
+foreach (var file in results)
+    foreach (var r in file.Replacements)
+        Console.WriteLine($"{file.FilePath}:{r.LineNumber}: {r.OriginalLine} → {r.ReplacedLine}");
+
+// Apply replacements (atomic write per file)
+FileReplacer.Apply(filePaths, "ERROR", "WARNING", ignoreCase: true);
+
+// Capture-group replacement — wildcards in find, $1/$2 in replace
+var results = FileReplacer.Preview(filePaths, "*console.log(*)*", "$1logger.info($2)$3");
+```
+
+Safety: skips binary files, read-only files, and files over 10MB. Preserves encoding (BOM) and line endings (`\r\n`/`\n`). Writes atomically via temp file + rename. If a file fails (permissions, locked), the error is reported and the remaining files continue processing.
+
 ### CLI Tool — `wcg`
 
 A command-line grep tool built on top of the library. Respects `.gitignore` by default, streams results as they're found.
@@ -157,6 +177,8 @@ Options:
   -A, --after-context <N>   Show N lines after each match
   -B, --before-context <N>  Show N lines before each match
   -C, --context <N>         Show N lines before and after each match
+  -r, --replace <text>      Replace matched content with this string (dry-run preview)
+  --write                   Write replacements to files (requires --replace)
 ```
 
 Examples:
@@ -189,6 +211,14 @@ wcg "**/*.log" "v?.?.?"                  # Matches v1.2.3, v2.0.1, …
 wcg "**/*.log" "HTTP [45]??"            # HTTP 4xx or 5xx — [45] + two ?? digits
 wcg "**/*.log" "[EIWD]*"                # Lines starting with E, I, W or D (ERROR/INFO/WARN/DEBUG)
 wcg "**/*.log" "[!D]*"                  # Lines not starting with D (excludes DEBUG)
+
+# Find and replace (dry-run preview by default):
+wcg "**/*.cs" oldMethod --replace newMethod          # Preview replacements
+wcg "**/*.cs" oldMethod --replace newMethod --write  # Apply changes
+wcg "**/*.cs" ERROR --replace WARNING -i             # Case-insensitive replace
+
+# Capture-group replacement (wildcards in find, $1/$2 in replace):
+wcg "**/*.cs" "*console.log(*)*" -r '$1logger.info($2)$3'  # Refactor method calls
 ```
 
 ## Benchmarks

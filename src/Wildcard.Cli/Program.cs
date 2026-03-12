@@ -16,6 +16,8 @@ var watchOption = new Option<bool>("-w", "--watch") { Description = "Watch for c
 var afterContextOption = new Option<int>("-A", "--after-context") { Description = "Show N lines after each match" };
 var beforeContextOption = new Option<int>("-B", "--before-context") { Description = "Show N lines before each match" };
 var contextOption = new Option<int>("-C", "--context") { Description = "Show N lines before and after each match" };
+var replaceOption = new Option<string?>("-r", "--replace") { Description = "Replace matched content with this string (dry-run by default)" };
+var writeOption = new Option<bool>("--write") { Description = "Write replacements to files (default: dry-run preview)" };
 
 var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, search content with wildcard patterns.")
 {
@@ -31,6 +33,8 @@ var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, searc
     afterContextOption,
     beforeContextOption,
     contextOption,
+    replaceOption,
+    writeOption,
 };
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -38,9 +42,11 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
     int ctxC = parseResult.GetValue(contextOption);
     int ctxB = parseResult.GetValue(beforeContextOption);
     int ctxA = parseResult.GetValue(afterContextOption);
+    // For replace mode, we need the raw (un-normalized) content patterns as the find string
+    var rawPatterns = parseResult.GetValue(patternArg) ?? [];
     var parsed = new CliArgs(
         parseResult.GetValue(globArg)!,
-        [.. (parseResult.GetValue(patternArg) ?? []).Select(NormalizeContentPattern)],
+        [.. rawPatterns.Select(NormalizeContentPattern)],
         [.. (parseResult.GetValue(excludeOption) ?? []).Select(NormalizeContentPattern)],
         [.. parseResult.GetValue(excludePathOption) ?? []],
         parseResult.GetValue(ignoreCaseOption),
@@ -49,7 +55,10 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         parseResult.GetValue(followSymlinksOption),
         parseResult.GetValue(watchOption),
         ctxB > 0 ? ctxB : ctxC,
-        ctxA > 0 ? ctxA : ctxC
+        ctxA > 0 ? ctxA : ctxC,
+        parseResult.GetValue(replaceOption),
+        parseResult.GetValue(writeOption),
+        [.. rawPatterns]
     );
 
     return await RunAsync(parsed);
@@ -75,6 +84,123 @@ static async Task<int> RunAsync(CliArgs parsed)
     var excludePathPatterns = parsed.ExcludePathPatterns.Count > 0
         ? parsed.ExcludePathPatterns.Select(p => WildcardPattern.Compile(p)).ToArray()
         : null;
+
+    // Replace mode
+    if (parsed.ReplaceWith is not null)
+    {
+        if (parsed.RawPatterns.Count == 0)
+        {
+            Console.Error.WriteLine("Error: --replace requires a content pattern to find.");
+            return 1;
+        }
+        if (parsed.Watch)
+        {
+            Console.Error.WriteLine("Error: --replace cannot be combined with --watch.");
+            return 1;
+        }
+
+        // Use the first raw pattern as the find string
+        var findStr = parsed.RawPatterns[0];
+        var replaceStr = parsed.ReplaceWith;
+
+        // Use FilePathMatcher to find files with matches (fast filter)
+        var replaceMatcher = FilePathMatcher.Create(
+            include: parsed.ContentPatterns.ToArray(),
+            exclude: parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null,
+            options: parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null
+        );
+
+        var matchingFiles = new List<string>();
+        foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
+        {
+            var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
+            if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+            if (replaceMatcher.ContainsMatch(file))
+                matchingFiles.Add(file);
+        }
+
+        if (matchingFiles.Count == 0)
+        {
+            Console.Error.WriteLine("No matching files found.");
+            return 1;
+        }
+
+        var results = parsed.WriteChanges
+            ? FileReplacer.Apply(matchingFiles.ToArray(), findStr, replaceStr, parsed.IgnoreCase)
+            : FileReplacer.Preview(matchingFiles.ToArray(), findStr, replaceStr, parsed.IgnoreCase);
+
+        int totalReplacements = 0;
+        int filesChanged = 0;
+        int errors = 0;
+
+        foreach (var result in results)
+        {
+            if (result.Error is not null)
+            {
+                errors++;
+                var relPath = Path.GetRelativePath(cwd, result.FilePath);
+                if (useColor)
+                    Console.Error.WriteLine($"\x1b[31m{relPath}: {result.Error}\x1b[0m");
+                else
+                    Console.Error.WriteLine($"{relPath}: {result.Error}");
+                continue;
+            }
+
+            if (result.Replacements.Count == 0) continue;
+            filesChanged++;
+            totalReplacements += result.Replacements.Count;
+
+            var relPath2 = Path.GetRelativePath(cwd, result.FilePath);
+            int width = result.Replacements[^1].LineNumber.ToString().Length;
+
+            if (useColor)
+                stdout.WriteLine($"\x1b[35m{relPath2}\x1b[0m ({result.Replacements.Count} replacement{(result.Replacements.Count > 1 ? "s" : "")})");
+            else
+                stdout.WriteLine($"{relPath2} ({result.Replacements.Count} replacement{(result.Replacements.Count > 1 ? "s" : "")})");
+
+            foreach (var r in result.Replacements)
+            {
+                var lineNum = r.LineNumber.ToString().PadLeft(width);
+                if (useColor)
+                {
+                    stdout.WriteLine($"  \x1b[32m{lineNum}\x1b[0m\x1b[31m- {r.OriginalLine}\x1b[0m");
+                    stdout.WriteLine($"  \x1b[32m{lineNum}\x1b[0m\x1b[32m+ {r.ReplacedLine}\x1b[0m");
+                }
+                else
+                {
+                    stdout.WriteLine($"  {lineNum}: - {r.OriginalLine}");
+                    stdout.WriteLine($"  {lineNum}: + {r.ReplacedLine}");
+                }
+            }
+            stdout.WriteLine();
+        }
+
+        if (totalReplacements == 0 && errors == 0)
+        {
+            Console.Error.WriteLine("No replacements found.");
+            return 1;
+        }
+
+        var summary = parsed.WriteChanges
+            ? $"{totalReplacements} replacement{(totalReplacements > 1 ? "s" : "")} applied in {filesChanged} file{(filesChanged > 1 ? "s" : "")}."
+            : $"{totalReplacements} replacement{(totalReplacements > 1 ? "s" : "")} in {filesChanged} file{(filesChanged > 1 ? "s" : "")} (dry-run, use --write to apply)";
+
+        if (useColor)
+            stdout.WriteLine($"\x1b[1m{summary}\x1b[0m");
+        else
+            stdout.WriteLine(summary);
+
+        if (errors > 0)
+        {
+            var errMsg = $"{errors} file{(errors > 1 ? "s" : "")} failed (see errors above).";
+            if (useColor)
+                Console.Error.WriteLine($"\x1b[31m{errMsg}\x1b[0m");
+            else
+                Console.Error.WriteLine(errMsg);
+        }
+
+        return errors > 0 ? 2 : 0;
+    }
 
     // No content pattern — just list files as they're found
     if (parsed.ContentPatterns.Count == 0)
@@ -679,4 +805,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext);
+record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext, string? ReplaceWith, bool WriteChanges, List<string> RawPatterns);
