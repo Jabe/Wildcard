@@ -68,6 +68,12 @@ List<FilePathMatcher.LineMatch> matches = matcher.Scan("app.log", "server.log");
 foreach (var match in matches)
     Console.WriteLine($"{match.FilePath}:{match.LineNumber}: {match.Line}");
 
+// Multiple include patterns — OR logic (match lines containing ERROR or WARN)
+var matcher = FilePathMatcher.Create(
+    include: ["*ERROR*", "*WARN*"]
+);
+var matches = matcher.Scan("app.log");
+
 // Include/exclude patterns — match lines containing ERROR but not DEBUG
 var matcher = FilePathMatcher.Create(
     include: ["*ERROR*"],
@@ -123,16 +129,35 @@ dotnet tool update -g wcg
 #### Usage
 
 ```
-wcg <glob> [pattern] [options]
+wcg <glob> [<pattern>...] [options]
 
-  wcg "src/**/*.cs"                        List matching files
-  wcg "**/*.log" "*ERROR*"                  Search for ERROR in log files
-  wcg "**/*.cs" "*TODO*" -x "*DONE*"        Search TODO, exclude DONE
-  wcg "**/*.cs" "*TODO*" -i                 Case-insensitive search
-  wcg "**/*.log" "*ERROR*" --watch          Watch for new ERROR lines
-  wcg "**/*" "*class*" -X "*test*"          Search, skip test paths
-  wcg "**/*.cs" --no-ignore                 Include .gitignore'd files
-  wcg "**/*.cs" -L                          Follow symbolic links
+Arguments:
+  <glob>      File glob pattern (e.g. "src/**/*.cs")
+  <pattern>   Content search pattern(s) — multiple patterns are OR'd (e.g. "*ERROR*" "*WARN*")
+
+Options:
+  -x, --exclude <pattern>   Exclude lines matching pattern (repeatable)
+  -X, --exclude-path <glob> Exclude files matching glob (repeatable)
+  -i, --ignore-case         Case-insensitive content matching
+  -l, --files-with-matches  Only print file paths that contain matches
+  --no-ignore               Don't respect .gitignore files
+  -L, --follow              Follow symbolic links
+  -w, --watch               Watch for changes after initial scan
+```
+
+Examples:
+
+```bash
+wcg "src/**/*.cs"                              # List matching files
+wcg "**/*.log" "*ERROR*"                       # Search for ERROR in log files
+wcg "**/*.log" "*ERROR*" "*WARN*"              # OR mode — match ERROR or WARN
+wcg "**/*.cs" "*TODO*" -x "*DONE*"             # Search TODO, exclude DONE
+wcg "**/*.cs" "*TODO*" "*FIXME*" -x "*DONE*"   # Search TODO or FIXME, exclude DONE
+wcg "**/*.cs" "*TODO*" -i                      # Case-insensitive search
+wcg "**/*.log" "*ERROR*" --watch               # Watch for new ERROR lines
+wcg "**/*" "*class*" -X "*test*"               # Search, skip test paths
+wcg "**/*.cs" --no-ignore                      # Include .gitignore'd files
+wcg "**/*.cs" -L                               # Follow symbolic links
 ```
 
 ## Benchmarks
@@ -257,7 +282,7 @@ This approach avoids the exponential worst-case that naive recursive implementat
 `FilePathMatcher` scans files on disk using memory-mapped I/O and parallel processing:
 
 - **Memory-mapped I/O** — files are mapped directly into memory, avoiding buffered read overhead. Files over 2GB are processed in 1GB overlapping sections.
-- **Byte-level pre-filtering** — for ASCII, case-sensitive patterns over UTF-8 data, pattern matching runs directly on raw bytes using SIMD-accelerated span operations (`IndexOf`, `StartsWith`, `EndsWith`). Lines that don't match skip UTF-8 decoding entirely.
+- **Byte-level pre-filtering** — for ASCII, case-sensitive patterns over UTF-8 data, pattern matching runs directly on raw bytes using SIMD-accelerated span operations (`IndexOf`, `StartsWith`, `EndsWith`). Lines that don't match skip UTF-8 decoding entirely. When multiple include patterns are given, each pattern gets its own byte-level filter; a line is skipped only when all filters reject it.
 - **Minimum length gate** — lines shorter than the pattern's minimum possible match length are rejected before any decoding or matching.
 - **Parallel multi-file scanning** — multiple files are scanned concurrently via `Parallel.For`, with results merged preserving file order.
 - **Async streaming** — `ScanAsync` uses a bounded channel to stream matches as they are found.

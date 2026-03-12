@@ -4,7 +4,7 @@ using System.Threading.Channels;
 using Wildcard;
 
 var globArg = new Argument<string>("glob") { Description = "File glob pattern (e.g. \"src/**/*.cs\")" };
-var patternArg = new Argument<string?>("pattern") { Description = "Content search pattern (e.g. \"*ERROR*\")", DefaultValueFactory = _ => null };
+var patternArg = new Argument<string[]>("pattern") { Description = "Content search pattern(s) — multiple patterns are OR'd (e.g. \"*ERROR*\" \"*WARN*\")", Arity = ArgumentArity.ZeroOrMore };
 
 var excludeOption = new Option<string[]>("-x", "--exclude") { Description = "Exclude lines matching pattern (repeatable)", AllowMultipleArgumentsPerToken = true };
 var excludePathOption = new Option<string[]>("-X", "--exclude-path") { Description = "Exclude files matching glob (repeatable)", AllowMultipleArgumentsPerToken = true };
@@ -31,7 +31,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var parsed = new CliArgs(
         parseResult.GetValue(globArg)!,
-        parseResult.GetValue(patternArg),
+        [.. parseResult.GetValue(patternArg) ?? []],
         [.. parseResult.GetValue(excludeOption) ?? []],
         [.. parseResult.GetValue(excludePathOption) ?? []],
         parseResult.GetValue(ignoreCaseOption),
@@ -66,7 +66,7 @@ static async Task<int> RunAsync(CliArgs parsed)
         : null;
 
     // No content pattern — just list files as they're found
-    if (parsed.ContentPattern is null)
+    if (parsed.ContentPatterns.Count == 0)
     {
         var knownFiles = parsed.Watch ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
@@ -94,7 +94,7 @@ static async Task<int> RunAsync(CliArgs parsed)
 
     // Content search — parallel pipeline: glob produces file paths, workers scan in parallel
     var matcher = FilePathMatcher.Create(
-        include: [parsed.ContentPattern],
+        include: parsed.ContentPatterns.ToArray(),
         exclude: parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null,
         options: parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null
     );
@@ -134,7 +134,11 @@ static async Task<int> RunAsync(CliArgs parsed)
         return anyOutput ? 0 : 1;
     }
 
-    string? highlightLiteral = ExtractHighlightLiteral(parsed.ContentPattern, parsed.IgnoreCase);
+    string[] highlightLiterals = parsed.ContentPatterns
+        .Select(p => ExtractHighlightLiteral(p, parsed.IgnoreCase))
+        .Where(l => l is not null)
+        .Select(l => l!)
+        .ToArray();
 
     // Track known match counts per file for watch mode (multiset to handle duplicate line text)
     var knownMatches = parsed.Watch
@@ -207,12 +211,12 @@ static async Task<int> RunAsync(CliArgs parsed)
         foreach (var match in fileMatches)
         {
             var lineNum = match.LineNumber.ToString().PadLeft(width);
-            var lineText = TruncateLine(match.Line, availableWidth, highlightLiteral, parsed.IgnoreCase);
+            var lineText = TruncateLine(match.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
 
             if (useColor)
             {
                 sb.Append($"  \x1b[32m{lineNum}\x1b[0m\x1b[36m:\x1b[0m ");
-                AppendHighlighted(sb, lineText, highlightLiteral, parsed.IgnoreCase);
+                AppendHighlighted(sb, lineText, highlightLiterals, parsed.IgnoreCase);
                 sb.AppendLine();
             }
             else
@@ -303,11 +307,11 @@ static async Task<int> RunAsync(CliArgs parsed)
             foreach (var match in freshMatches)
             {
                 var lnStr = match.LineNumber.ToString().PadLeft(width);
-                var lineText = TruncateLine(match.Line, availableWidth, highlightLiteral, parsed.IgnoreCase);
+                var lineText = TruncateLine(match.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
                 if (useColor)
                 {
                     sb.Append($"  \x1b[32m{lnStr}\x1b[0m\x1b[36m:\x1b[0m ");
-                    AppendHighlighted(sb, lineText, highlightLiteral, parsed.IgnoreCase);
+                    AppendHighlighted(sb, lineText, highlightLiterals, parsed.IgnoreCase);
                     sb.AppendLine();
                 }
                 else
@@ -336,43 +340,68 @@ static string? ExtractHighlightLiteral(string pattern, bool ignoreCase)
     return null;
 }
 
-static void AppendHighlighted(StringBuilder sb, string line, string? literal, bool ignoreCase)
+static void AppendHighlighted(StringBuilder sb, string line, string[] literals, bool ignoreCase)
 {
-    if (literal is null) { sb.Append(line); return; }
+    if (literals.Length == 0) { sb.Append(line); return; }
     var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-    int pos = 0;
-    while (pos < line.Length)
+
+    // Collect all (start, length) highlight spans across all literals, then render in order.
+    var spans = new List<(int Start, int Length)>();
+    foreach (var literal in literals)
     {
-        int idx = line.IndexOf(literal, pos, comparison);
-        if (idx < 0) { sb.Append(line.AsSpan(pos)); break; }
-        sb.Append(line.AsSpan(pos, idx - pos));
-        sb.Append("\x1b[1;31m");
-        sb.Append(line.AsSpan(idx, literal.Length));
-        sb.Append("\x1b[0m");
-        pos = idx + literal.Length;
+        int pos = 0;
+        while (pos < line.Length)
+        {
+            int idx = line.IndexOf(literal, pos, comparison);
+            if (idx < 0) break;
+            spans.Add((idx, literal.Length));
+            pos = idx + literal.Length;
+        }
     }
+
+    if (spans.Count == 0) { sb.Append(line); return; }
+
+    spans.Sort((a, b) => a.Start != b.Start ? a.Start.CompareTo(b.Start) : b.Length.CompareTo(a.Length));
+
+    int cursor = 0;
+    foreach (var (start, length) in spans)
+    {
+        if (start < cursor) continue; // overlapped by a previous span
+        sb.Append(line.AsSpan(cursor, start - cursor));
+        sb.Append("\x1b[1;31m");
+        sb.Append(line.AsSpan(start, length));
+        sb.Append("\x1b[0m");
+        cursor = start + length;
+    }
+    sb.Append(line.AsSpan(cursor));
 }
 
-static string TruncateLine(string line, int availableWidth, string? highlightLiteral, bool ignoreCase)
+static string TruncateLine(string line, int availableWidth, string[] highlightLiterals, bool ignoreCase)
 {
     if (availableWidth <= 0 || line.Length <= availableWidth)
         return line;
 
-    // Find all match positions
+    // Find all match positions across all literals
     var matchIndices = new List<int>();
     int matchLen = 0;
-    if (highlightLiteral is not null)
+    if (highlightLiterals.Length > 0)
     {
-        matchLen = highlightLiteral.Length;
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        int pos = 0;
-        while (pos <= line.Length - matchLen)
+        foreach (var highlightLiteral in highlightLiterals)
         {
-            int idx = line.IndexOf(highlightLiteral, pos, comparison);
-            if (idx < 0) break;
-            matchIndices.Add(idx);
-            pos = idx + matchLen;
+            if (highlightLiteral.Length == 0) continue;
+            int pos = 0;
+            while (pos <= line.Length - highlightLiteral.Length)
+            {
+                int idx = line.IndexOf(highlightLiteral, pos, comparison);
+                if (idx < 0) break;
+                matchIndices.Add(idx);
+                pos = idx + highlightLiteral.Length;
+            }
+            // Use longest literal length as the representative match length for snippet sizing
+            if (highlightLiteral.Length > matchLen) matchLen = highlightLiteral.Length;
         }
+        matchIndices.Sort();
     }
 
     // No matches — truncate from the right
@@ -548,4 +577,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch);
+record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch);

@@ -46,11 +46,21 @@ public sealed class FilePathMatcher
     // Single-include fast path
     private readonly WildcardPattern? _singleInclude;
 
-    // Byte-level pre-filter for ASCII patterns over UTF-8
+    // Byte-level pre-filter for ASCII patterns over UTF-8 (single-include path)
     private readonly byte[]? _bytePrefix;
     private readonly byte[]? _byteSuffix;
     private readonly WildcardPattern.PatternShape _bytePreFilterShape;
     private readonly bool _bytePreFilterEnabled;
+
+    // Per-pattern byte pre-filters for multi-include OR path
+    private readonly struct ByteFilter(WildcardPattern.PatternShape shape, byte[]? prefix, byte[]? suffix)
+    {
+        public readonly WildcardPattern.PatternShape Shape = shape;
+        public readonly byte[]? Prefix = prefix;
+        public readonly byte[]? Suffix = suffix;
+    }
+    private readonly ByteFilter[]? _perIncludeByteFilters; // non-null when all includes have usable filters
+    private readonly bool _multiBytePreFilterEnabled;
 
     private FilePathMatcher(WildcardPattern[] includes, WildcardPattern[]? excludes, Options options)
     {
@@ -60,6 +70,24 @@ public sealed class FilePathMatcher
         _singleInclude = includes.Length == 1 ? includes[0] : null;
         _minLineLength = ComputeMinLength(includes);
         InitBytePreFilter(_singleInclude, _encoding, out _bytePreFilterEnabled, out _bytePreFilterShape, out _bytePrefix, out _byteSuffix);
+
+        // Build per-include byte filters for multi-pattern OR: reject a line only when ALL filters reject it.
+        if (includes.Length > 1 && _encoding.CodePage == 65001)
+        {
+            var filters = new ByteFilter[includes.Length];
+            bool allEnabled = true;
+            for (int i = 0; i < includes.Length; i++)
+            {
+                InitBytePreFilter(includes[i], _encoding, out bool en, out var sh, out var pfx, out var sfx);
+                if (!en) { allEnabled = false; break; }
+                filters[i] = new ByteFilter(sh, pfx, sfx);
+            }
+            if (allEnabled)
+            {
+                _perIncludeByteFilters = filters;
+                _multiBytePreFilterEnabled = true;
+            }
+        }
     }
 
     private static void InitBytePreFilter(
@@ -99,6 +127,18 @@ public sealed class FilePathMatcher
         }
         return true;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ByteFilterMatches(ReadOnlySpan<byte> lineBytes, in ByteFilter filter) =>
+        filter.Shape switch
+        {
+            WildcardPattern.PatternShape.StarContainsStar => lineBytes.IndexOf(filter.Prefix) >= 0,
+            WildcardPattern.PatternShape.PureLiteral => lineBytes.Length == filter.Prefix!.Length && lineBytes.SequenceEqual(filter.Prefix),
+            WildcardPattern.PatternShape.StarSuffix => lineBytes.EndsWith(filter.Suffix),
+            WildcardPattern.PatternShape.PrefixStar => lineBytes.StartsWith(filter.Prefix),
+            WildcardPattern.PatternShape.PrefixStarSuffix => lineBytes.StartsWith(filter.Prefix) && lineBytes.EndsWith(filter.Suffix),
+            _ => true,
+        };
 
     /// <summary>
     /// Creates a matcher with a single include pattern.
@@ -515,6 +555,16 @@ public sealed class FilePathMatcher
                 }
                 return;
             }
+        }
+        else if (_multiBytePreFilterEnabled)
+        {
+            // Multi-include OR: skip decoding only when ALL per-pattern byte filters reject this line.
+            bool anyPass = false;
+            foreach (ref readonly var filter in _perIncludeByteFilters!.AsSpan())
+            {
+                if (ByteFilterMatches(lineBytes, in filter)) { anyPass = true; break; }
+            }
+            if (!anyPass) return;
         }
 
         // Decode to chars

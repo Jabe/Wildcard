@@ -363,4 +363,182 @@ public class FilePathMatcherTests : IDisposable
             syncResults.Select(r => (r.FilePath, r.LineNumber, r.Line)).OrderBy(r => r).ToList(),
             asyncResults.Select(r => (r.FilePath, r.LineNumber, r.Line)).OrderBy(r => r).ToList());
     }
+
+    // ==================== Multi-include OR mode ====================
+
+    [Fact]
+    public void Scan_MultipleIncludes_MatchesLineWithFirstPattern()
+    {
+        // *ERROR* matches lines 4 and 6 of the log file
+        var matcher = FilePathMatcher.Create(include: ["*ERROR*", "*DOESNOTEXIST*"]);
+        var results = matcher.Scan(_logFile);
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.Contains("ERROR", r.Line));
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_MatchesLineWithSecondPattern()
+    {
+        // *WARN* matches line 3 only; *DOESNOTEXIST* matches nothing
+        var matcher = FilePathMatcher.Create(include: ["*DOESNOTEXIST*", "*WARN*"]);
+        var results = matcher.Scan(_logFile);
+
+        Assert.Single(results);
+        Assert.Contains("WARN", results[0].Line);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_LineMatchingBothPatternsAppearsOnce()
+    {
+        // A line containing "ERROR" also trivially matches "*" — should appear exactly once.
+        // Use two patterns that both match the same ERROR lines.
+        var matcher = FilePathMatcher.Create(include: ["*ERROR*", "*Payment*"]);
+        var results = matcher.Scan(_logFile);
+
+        // Line 4 contains both "ERROR" and "Payment" — must not be duplicated
+        var line4Matches = results.Where(r => r.LineNumber == 4).ToList();
+        Assert.Single(line4Matches);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_NoMatchReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create(include: ["*CRITICAL*", "*FATAL*"]);
+        var results = matcher.Scan(_logFile);
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_WithExclude()
+    {
+        // Include ERROR or WARN, exclude lines with "timeout"
+        var matcher = FilePathMatcher.Create(
+            include: ["*ERROR*", "*WARN*"],
+            exclude: ["*timeout*"]);
+        var results = matcher.Scan(_logFile);
+
+        // WARN line (3), ERROR+connection (6) — timeout ERROR line (4) excluded
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.DoesNotContain("timeout", r.Line));
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_CorrectLineNumbers()
+    {
+        // *WARN* = line 3, *ERROR* = lines 4, 6
+        var matcher = FilePathMatcher.Create(include: ["*WARN*", "*ERROR*"]);
+        var results = matcher.Scan(_logFile);
+
+        Assert.Equal(3, results.Count);
+        Assert.Equal(3, results[0].LineNumber);
+        Assert.Equal(4, results[1].LineNumber);
+        Assert.Equal(6, results[2].LineNumber);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_MatchesAcrossMultipleFiles()
+    {
+        // WARN in log, TODO in code
+        var matcher = FilePathMatcher.Create(include: ["*WARN*", "*TODO*"]);
+        var results = matcher.Scan(_logFile, _codeFile);
+
+        Assert.Contains(results, r => r.FilePath == _logFile && r.Line.Contains("WARN"));
+        Assert.Contains(results, r => r.FilePath == _codeFile && r.Line.Contains("TODO"));
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_StarSuffixShapes_BytePreFilterWorks()
+    {
+        // Both patterns have StarSuffix shape (ASCII literals) → _multiBytePreFilterEnabled = true
+        var logLineFile = CreateFile("shapes_test.txt",
+            "payment.log opened\nconfig.json loaded\nreport.csv exported\ndata.xml parsed\n");
+
+        var matcher = FilePathMatcher.Create(include: ["*.log*", "*.csv*"]);
+        var results = matcher.Scan(logLineFile);
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.Line.Contains(".log"));
+        Assert.Contains(results, r => r.Line.Contains(".csv"));
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_PrefixStarShapes_BytePreFilterWorks()
+    {
+        // Both patterns have PrefixStar shape (ASCII literals) → byte pre-filter active
+        var file = CreateFile("prefix_test.txt",
+            "ERROR: something failed\nWARN: low memory\nINFO: all good\nDEBUG: verbose\n");
+
+        var matcher = FilePathMatcher.Create(include: ["ERROR*", "WARN*"]);
+        var results = matcher.Scan(file);
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.Line.StartsWith("ERROR"));
+        Assert.Contains(results, r => r.Line.StartsWith("WARN"));
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_StarContainsStarShapes_BytePreFilterWorks()
+    {
+        // Both patterns are StarContainsStar — byte pre-filter checks IndexOf
+        var matcher = FilePathMatcher.Create(include: ["*ERROR*", "*WARN*"]);
+        var results = matcher.Scan(_logFile);
+
+        // Verify correct count; byte pre-filter must not drop valid lines
+        Assert.Equal(3, results.Count);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_NonAsciiPattern_StillMatchesCorrectly()
+    {
+        // Non-ASCII pattern disables byte pre-filter for that pattern
+        // (_multiBytePreFilterEnabled = false), but matching must still work
+        var file = CreateFile("unicode_test.txt",
+            "hello world\ncafé au lait\nerror occurred\n");
+
+        var matcher = FilePathMatcher.Create(include: ["*café*", "*error*"]);
+        var results = matcher.Scan(file);
+
+        Assert.Equal(2, results.Count);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_MatchesOnWindows_LineEndings()
+    {
+        var matcher = FilePathMatcher.Create(include: ["*ERROR*", "*INFO*"]);
+        var results = matcher.Scan(_windowsLineEndings);
+
+        // windows.txt has "second ERROR line" → 1 match
+        Assert.Single(results);
+        Assert.DoesNotContain("\r", results[0].Line);
+    }
+
+    [Fact]
+    public void ContainsMatch_MultipleIncludes_ReturnsTrueWhenAnyMatches()
+    {
+        var matcher = FilePathMatcher.Create(include: ["*CRITICAL*", "*WARN*"]);
+        Assert.True(matcher.ContainsMatch(_logFile));  // log has WARN
+    }
+
+    [Fact]
+    public void ContainsMatch_MultipleIncludes_ReturnsFalseWhenNoneMatch()
+    {
+        var matcher = FilePathMatcher.Create(include: ["*CRITICAL*", "*FATAL*"]);
+        Assert.False(matcher.ContainsMatch(_logFile));
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_ResultsMatchOrOfSinglePatterns()
+    {
+        // Verify OR semantics: multi-include should equal union of individual scans (deduped, ordered)
+        var m1 = FilePathMatcher.Create("*ERROR*").Scan(_logFile).Select(r => r.LineNumber).ToHashSet();
+        var m2 = FilePathMatcher.Create("*INFO*").Scan(_logFile).Select(r => r.LineNumber).ToHashSet();
+        var expected = m1.Union(m2).OrderBy(n => n).ToList();
+
+        var combined = FilePathMatcher.Create(include: ["*ERROR*", "*INFO*"]).Scan(_logFile);
+        var actual = combined.Select(r => r.LineNumber).OrderBy(n => n).ToList();
+
+        Assert.Equal(expected, actual);
+    }
 }
