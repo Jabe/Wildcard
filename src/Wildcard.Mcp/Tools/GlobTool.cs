@@ -15,7 +15,8 @@ public static class GlobTool
         [Description("Glob patterns to exclude file paths (e.g. \"**/node_modules/**\")")] string[]? exclude_paths = null,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
-        [Description("Maximum number of results to return (default: 10000)")] int limit = 10000)
+        [Description("Maximum number of results to return (default: 10000)")] int limit = 10000,
+        [Description("Return only the count of matching files, not the file paths (default: false)")] bool count = false)
     {
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var options = new GlobOptions
@@ -29,12 +30,10 @@ public static class GlobTool
             excludePatterns = exclude_paths.Select(p => WildcardPattern.Compile(p)).ToArray();
 
         var sb = new StringBuilder();
-        int count = 0;
-        int total = 0;
+        int matched = 0;
 
         foreach (var file in Wildcard.Glob.Match(pattern, baseDir, options))
         {
-            total++;
             var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
 
             if (excludePatterns is not null)
@@ -47,20 +46,23 @@ public static class GlobTool
                 if (excluded) continue;
             }
 
-            count++;
-            if (count <= limit)
+            matched++;
+            if (!count && matched <= limit)
             {
                 sb.AppendLine(relPath);
             }
         }
 
-        if (count == 0)
+        if (matched == 0)
             return "No files found.";
 
-        if (count > limit)
-            sb.AppendLine($"\n... and {count - limit} more files ({count} total, showing first {limit})");
+        if (count)
+            return $"{matched} file{(matched > 1 ? "s" : "")} found.";
+
+        if (matched > limit)
+            sb.AppendLine($"\n... and {matched - limit} more files ({matched} total, showing first {limit})");
         else
-            sb.AppendLine($"\n{count} files found.");
+            sb.AppendLine($"\n{matched} files found.");
 
         return sb.ToString();
     }

@@ -18,6 +18,7 @@ var beforeContextOption = new Option<int>("-B", "--before-context") { Descriptio
 var contextOption = new Option<int>("-C", "--context") { Description = "Show N lines before and after each match" };
 var replaceOption = new Option<string?>("-r", "--replace") { Description = "Replace matched content with this string (dry-run by default)" };
 var writeOption = new Option<bool>("--write") { Description = "Write replacements to files (default: dry-run preview)" };
+var countOption = new Option<bool>("-c", "--count") { Description = "Show count of matching lines per file instead of line content" };
 
 var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, search content with wildcard patterns.")
 {
@@ -35,6 +36,7 @@ var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, searc
     contextOption,
     replaceOption,
     writeOption,
+    countOption,
 };
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -58,6 +60,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         ctxA > 0 ? ctxA : ctxC,
         parseResult.GetValue(replaceOption),
         parseResult.GetValue(writeOption),
+        parseResult.GetValue(countOption),
         [.. rawPatterns]
     );
 
@@ -84,6 +87,18 @@ static async Task<int> RunAsync(CliArgs parsed)
     var excludePathPatterns = parsed.ExcludePathPatterns.Count > 0
         ? parsed.ExcludePathPatterns.Select(p => WildcardPattern.Compile(p)).ToArray()
         : null;
+
+    // Validation
+    if (parsed.Count && parsed.ReplaceWith is not null)
+    {
+        Console.Error.WriteLine("Error: --count cannot be combined with --replace.");
+        return 1;
+    }
+    if (parsed.Count && parsed.Watch)
+    {
+        Console.Error.WriteLine("Error: --count cannot be combined with --watch.");
+        return 1;
+    }
 
     // Replace mode
     if (parsed.ReplaceWith is not null)
@@ -205,6 +220,25 @@ static async Task<int> RunAsync(CliArgs parsed)
     // No content pattern — just list files as they're found
     if (parsed.ContentPatterns.Count == 0)
     {
+        if (parsed.Count)
+        {
+            int fileCount = 0;
+            foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
+            {
+                var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
+                if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                fileCount++;
+            }
+            if (fileCount == 0)
+            {
+                Console.Error.WriteLine("No files found.");
+                return 1;
+            }
+            var msg = $"{fileCount} file{(fileCount > 1 ? "s" : "")} found.";
+            stdout.WriteLine(useColor ? $"\x1b[1m{msg}\x1b[0m" : msg);
+            return 0;
+        }
+
         var knownFiles = parsed.Watch ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
         {
@@ -235,6 +269,63 @@ static async Task<int> RunAsync(CliArgs parsed)
         exclude: parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null,
         options: parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null
     );
+
+    // Count mode: per-file match counts + summary
+    if (parsed.Count)
+    {
+        var countChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        {
+            SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
+        });
+        var countProducer = Task.Run(() =>
+        {
+            try
+            {
+                var glob = Glob.Parse(parsed.GlobPattern);
+                glob.WriteMatchesToChannel(countChannel.Writer, globOptions);
+            }
+            finally { countChannel.Writer.Complete(); }
+        });
+
+        int totalMatches = 0;
+        int totalFiles = 0;
+        var countLock = new object();
+
+        await Parallel.ForEachAsync(countChannel.Reader.ReadAllAsync(), async (file, _) =>
+        {
+            await Task.CompletedTask;
+            var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
+            if (IsPathExcluded(relPath, excludePathPatterns)) return;
+            var fileMatches = matcher.Scan(file);
+            if (fileMatches.Count == 0) return;
+
+            lock (countLock)
+            {
+                totalMatches += fileMatches.Count;
+                totalFiles++;
+                if (!parsed.FilesOnly)
+                {
+                    if (useColor)
+                        stdout.WriteLine($"\x1b[35m{relPath}\x1b[0m:\x1b[32m{fileMatches.Count}\x1b[0m");
+                    else
+                        stdout.WriteLine($"{relPath}:{fileMatches.Count}");
+                }
+            }
+        });
+        await countProducer;
+
+        if (totalMatches == 0)
+        {
+            Console.Error.WriteLine("No matches found.");
+            return 1;
+        }
+
+        if (!parsed.FilesOnly)
+            stdout.WriteLine();
+        var summary = $"{totalMatches} match{(totalMatches > 1 ? "es" : "")} in {totalFiles} file{(totalFiles > 1 ? "s" : "")}.";
+        stdout.WriteLine(useColor ? $"\x1b[1m{summary}\x1b[0m" : summary);
+        return 0;
+    }
 
     // Files-only mode: just print file paths that contain matches
     if (parsed.FilesOnly)
@@ -805,4 +896,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext, string? ReplaceWith, bool WriteChanges, List<string> RawPatterns);
+record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext, string? ReplaceWith, bool WriteChanges, bool Count, List<string> RawPatterns);

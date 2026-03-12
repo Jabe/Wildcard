@@ -23,7 +23,8 @@ public static class GrepTool
         [Description("Maximum number of matched lines to return (default: 500)")] int limit = 500,
         [Description("Lines to show before each match (default: 0)")] int before_context = 0,
         [Description("Lines to show after each match (default: 0)")] int after_context = 0,
-        [Description("Lines to show before and after each match — shorthand for before_context + after_context (default: 0)")] int context = 0)
+        [Description("Lines to show before and after each match — shorthand for before_context + after_context (default: 0)")] int context = 0,
+        [Description("Return match counts per file instead of line content (default: false)")] bool count = false)
     {
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var globOptions = new GlobOptions
@@ -44,6 +45,9 @@ public static class GrepTool
             include: normalizedPatterns,
             exclude: normalizedExcludes,
             options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
+
+        if (count)
+            return RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only);
 
         if (files_only)
             return RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit);
@@ -307,6 +311,72 @@ public static class GrepTool
 
         if (matchCount >= limit)
             sb.AppendLine($"\n... results truncated at {limit} matches. Use a more specific pattern to narrow results.");
+
+        return sb.ToString();
+    }
+
+    private static string RunCountSearch(string pattern, string baseDir, GlobOptions globOptions,
+        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit, bool summaryOnly)
+    {
+        var sb = new StringBuilder();
+        int totalMatches = 0;
+        int totalFiles = 0;
+
+        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        {
+            SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
+        });
+
+        var producer = Task.Run(() =>
+        {
+            try
+            {
+                if (excludePathPatterns is not null)
+                {
+                    foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+                    {
+                        var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+                        if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                        Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
+                    }
+                }
+                else
+                {
+                    var glob = Wildcard.Glob.Parse(pattern);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                }
+            }
+            finally { fileChannel.Writer.Complete(); }
+        });
+
+        var outputLock = new object();
+        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
+        {
+            var fileMatches = matcher.Scan(file);
+            if (fileMatches.Count == 0) return;
+
+            var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+
+            lock (outputLock)
+            {
+                totalMatches += fileMatches.Count;
+                totalFiles++;
+                if (!summaryOnly && totalFiles <= limit)
+                    sb.AppendLine($"{relPath}:{fileMatches.Count}");
+            }
+        });
+
+        producer.Wait();
+
+        if (totalMatches == 0)
+            return "No matches found.";
+
+        if (!summaryOnly && totalFiles > limit)
+            sb.AppendLine($"... and {totalFiles - limit} more files ({totalFiles} total, showing first {limit})");
+
+        if (!summaryOnly)
+            sb.AppendLine();
+        sb.AppendLine($"{totalMatches} match{(totalMatches > 1 ? "es" : "")} in {totalFiles} file{(totalFiles > 1 ? "s" : "")}.");
 
         return sb.ToString();
     }
