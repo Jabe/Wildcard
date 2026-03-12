@@ -133,7 +133,7 @@ wcg <glob> [<pattern>...] [options]
 
 Arguments:
   <glob>      File glob pattern (e.g. "src/**/*.cs")
-  <pattern>   Content search pattern(s) — multiple patterns are OR'd (e.g. "*ERROR*" "*WARN*")
+  <pattern>   Content search pattern(s) — multiple patterns are OR'd (e.g. ERROR WARN). Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. "ERROR*", "*.log").
 
 Options:
   -x, --exclude <pattern>   Exclude lines matching pattern (repeatable)
@@ -148,16 +148,31 @@ Options:
 Examples:
 
 ```bash
-wcg "src/**/*.cs"                              # List matching files
-wcg "**/*.log" "*ERROR*"                       # Search for ERROR in log files
-wcg "**/*.log" "*ERROR*" "*WARN*"              # OR mode — match ERROR or WARN
-wcg "**/*.cs" "*TODO*" -x "*DONE*"             # Search TODO, exclude DONE
-wcg "**/*.cs" "*TODO*" "*FIXME*" -x "*DONE*"   # Search TODO or FIXME, exclude DONE
-wcg "**/*.cs" "*TODO*" -i                      # Case-insensitive search
-wcg "**/*.log" "*ERROR*" --watch               # Watch for new ERROR lines
-wcg "**/*" "*class*" -X "*test*"               # Search, skip test paths
-wcg "**/*.cs" --no-ignore                      # Include .gitignore'd files
-wcg "**/*.cs" -L                               # Follow symbolic links
+wcg "src/**/*.cs"                         # List matching files
+wcg "**/*.log" ERROR                      # Search for lines containing ERROR
+wcg "**/*.log" ERROR WARN                 # OR mode — containing ERROR or WARN
+wcg "**/*.cs" TODO -x DONE               # Search TODO, exclude DONE
+wcg "**/*.cs" TODO FIXME -x DONE         # Search TODO or FIXME, exclude DONE
+wcg "**/*.cs" TODO -i                    # Case-insensitive search
+wcg "**/*.log" ERROR --watch             # Watch for new ERROR lines
+wcg "**/*" class -X "*test*"             # Search, skip test paths
+wcg "**/*.cs" --no-ignore               # Include .gitignore'd files
+wcg "**/*.cs" -L                         # Follow symbolic links
+
+# Plain words are auto-wrapped as *word* (substring match).
+# Use explicit wildcards for prefix/suffix/pattern matching:
+wcg "**/*.cs" "using*"                   # Lines starting with "using"
+wcg "**/*.log" "*.json"                  # Lines ending with ".json"
+wcg "**/*.log" "*ERROR*timeout*"         # Multi-segment wildcard
+
+# ? matches exactly one character:
+wcg "**/*.log" "ERR?R"                   # Matches ERROR, ERRIR, ERR0R, …
+wcg "**/*.log" "v?.?.?"                  # Matches v1.2.3, v2.0.1, …
+
+# Character classes:
+wcg "**/*.log" "HTTP [45]??"            # HTTP 4xx or 5xx — [45] + two ?? digits
+wcg "**/*.log" "[EIWD]*"                # Lines starting with E, I, W or D (ERROR/INFO/WARN/DEBUG)
+wcg "**/*.log" "[!D]*"                  # Lines not starting with D (excludes DEBUG)
 ```
 
 ## Benchmarks

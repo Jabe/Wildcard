@@ -4,7 +4,7 @@ using System.Threading.Channels;
 using Wildcard;
 
 var globArg = new Argument<string>("glob") { Description = "File glob pattern (e.g. \"src/**/*.cs\")" };
-var patternArg = new Argument<string[]>("pattern") { Description = "Content search pattern(s) — multiple patterns are OR'd (e.g. \"*ERROR*\" \"*WARN*\")", Arity = ArgumentArity.ZeroOrMore };
+var patternArg = new Argument<string[]>("pattern") { Description = "Content search pattern(s) — multiple patterns are OR'd (e.g. ERROR WARN). Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\").", Arity = ArgumentArity.ZeroOrMore };
 
 var excludeOption = new Option<string[]>("-x", "--exclude") { Description = "Exclude lines matching pattern (repeatable)", AllowMultipleArgumentsPerToken = true };
 var excludePathOption = new Option<string[]>("-X", "--exclude-path") { Description = "Exclude files matching glob (repeatable)", AllowMultipleArgumentsPerToken = true };
@@ -31,7 +31,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var parsed = new CliArgs(
         parseResult.GetValue(globArg)!,
-        [.. parseResult.GetValue(patternArg) ?? []],
+        [.. (parseResult.GetValue(patternArg) ?? []).Select(NormalizeContentPattern)],
         [.. parseResult.GetValue(excludeOption) ?? []],
         [.. parseResult.GetValue(excludePathOption) ?? []],
         parseResult.GetValue(ignoreCaseOption),
@@ -329,6 +329,17 @@ static async Task<int> RunAsync(CliArgs parsed)
 }
 
 // --- Helpers ---
+
+static string NormalizeContentPattern(string pattern)
+{
+    // Plain strings (no unescaped wildcard chars) are treated as substring matches: wrap as *<pattern>*
+    for (int i = 0; i < pattern.Length; i++)
+    {
+        if (pattern[i] == '\\') { i++; continue; } // skip escaped char
+        if (pattern[i] is '*' or '?' or '[') return pattern;
+    }
+    return $"*{pattern}*";
+}
 
 static string? ExtractHighlightLiteral(string pattern, bool ignoreCase)
 {
