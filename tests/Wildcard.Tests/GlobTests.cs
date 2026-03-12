@@ -359,10 +359,52 @@ public class GlobTests : IDisposable
         Assert.False(Wildcard.Glob.IsMatch("**/**/*.cs", "readme.md"));
     }
 
+    // --- Symlink handling ---
+
     [Fact]
-    public void SymlinkCycle_Terminates()
+    public void Symlinks_NotFollowedByDefault()
     {
         if (OperatingSystem.IsWindows()) return; // symlinks need elevation on Windows
+
+        // Create: tempdir/target/file.txt and tempdir/link -> tempdir/target
+        var targetDir = Path.Combine(_tempDir, "target");
+        Directory.CreateDirectory(targetDir);
+        File.WriteAllText(Path.Combine(targetDir, "file.txt"), "hello");
+        Directory.CreateSymbolicLink(Path.Combine(_tempDir, "link"), targetDir);
+
+        var results = Wildcard.Glob.Match("**/*", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        // Files in the real directory are found
+        Assert.Contains("target/file.txt", results);
+        // Symlinked directory is not traversed
+        Assert.DoesNotContain("link/file.txt", results);
+    }
+
+    [Fact]
+    public void Symlinks_FollowedWhenEnabled()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var targetDir = Path.Combine(_tempDir, "target");
+        Directory.CreateDirectory(targetDir);
+        File.WriteAllText(Path.Combine(targetDir, "file.txt"), "hello");
+        Directory.CreateSymbolicLink(Path.Combine(_tempDir, "link"), targetDir);
+
+        var options = new GlobOptions { FollowSymlinks = true };
+        var results = Wildcard.Glob.Match("**/*", _tempDir, options)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        Assert.Contains("target/file.txt", results);
+        Assert.Contains("link/file.txt", results);
+    }
+
+    [Fact]
+    public void SymlinkCycle_SkippedByDefault()
+    {
+        if (OperatingSystem.IsWindows()) return;
 
         // Create a symlink cycle: tempdir/a/b/loop -> tempdir/a
         var dirA = Path.Combine(_tempDir, "a");
@@ -372,12 +414,74 @@ public class GlobTests : IDisposable
         File.WriteAllText(Path.Combine(dirB, "file2.txt"), "world");
         Directory.CreateSymbolicLink(Path.Combine(dirB, "loop"), dirA);
 
-        // Should terminate despite the cycle, not throw or hang
+        // Symlinks not followed by default — terminates without issue
         var results = Wildcard.Glob.Match("**/*", _tempDir)
             .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
             .ToList();
 
         Assert.Contains("a/file.txt", results);
         Assert.Contains("a/b/file2.txt", results);
+        // The symlink loop directory is not traversed
+        Assert.DoesNotContain("a/b/loop/file.txt", results);
+    }
+
+    [Fact]
+    public void SymlinkCycle_DetectedWhenFollowing()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dirA = Path.Combine(_tempDir, "a");
+        var dirB = Path.Combine(_tempDir, "a", "b");
+        Directory.CreateDirectory(dirB);
+        File.WriteAllText(Path.Combine(dirA, "file.txt"), "hello");
+        File.WriteAllText(Path.Combine(dirB, "file2.txt"), "world");
+        Directory.CreateSymbolicLink(Path.Combine(dirB, "loop"), dirA);
+
+        // With FollowSymlinks, cycle detection prevents infinite recursion
+        var options = new GlobOptions { FollowSymlinks = true };
+        var results = Wildcard.Glob.Match("**/*", _tempDir, options)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        Assert.Contains("a/file.txt", results);
+        Assert.Contains("a/b/file2.txt", results);
+        // Files through the symlink are found (one level before cycle detection)
+        Assert.Contains("a/b/loop/file.txt", results);
+        Assert.Contains("a/b/loop/b/file2.txt", results);
+    }
+
+    [Fact]
+    public void SymlinkedFile_SkippedByDefault()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var realFile = Path.Combine(_tempDir, "real.txt");
+        File.WriteAllText(realFile, "content");
+        File.CreateSymbolicLink(Path.Combine(_tempDir, "link.txt"), realFile);
+
+        var results = Wildcard.Glob.Match("*.txt", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        Assert.Contains("real.txt", results);
+        Assert.DoesNotContain("link.txt", results);
+    }
+
+    [Fact]
+    public void SymlinkedFile_IncludedWhenFollowing()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var realFile = Path.Combine(_tempDir, "real.txt");
+        File.WriteAllText(realFile, "content");
+        File.CreateSymbolicLink(Path.Combine(_tempDir, "link.txt"), realFile);
+
+        var options = new GlobOptions { FollowSymlinks = true };
+        var results = Wildcard.Glob.Match("*.txt", _tempDir, options)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        Assert.Contains("real.txt", results);
+        Assert.Contains("link.txt", results);
     }
 }

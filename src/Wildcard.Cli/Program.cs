@@ -11,6 +11,7 @@ var excludePathOption = new Option<string[]>("-X", "--exclude-path") { Descripti
 var ignoreCaseOption = new Option<bool>("-i", "--ignore-case") { Description = "Case-insensitive content matching" };
 var filesOnlyOption = new Option<bool>("-l", "--files-with-matches") { Description = "Only print file paths that contain matches" };
 var noIgnoreOption = new Option<bool>("--no-ignore") { Description = "Don't respect .gitignore files" };
+var followSymlinksOption = new Option<bool>("-L", "--follow") { Description = "Follow symbolic links" };
 var watchOption = new Option<bool>("-w", "--watch") { Description = "Watch for changes after initial scan" };
 
 var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, search content with wildcard patterns.")
@@ -22,6 +23,7 @@ var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, searc
     ignoreCaseOption,
     filesOnlyOption,
     noIgnoreOption,
+    followSymlinksOption,
     watchOption,
 };
 
@@ -35,6 +37,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         parseResult.GetValue(ignoreCaseOption),
         parseResult.GetValue(filesOnlyOption),
         parseResult.GetValue(noIgnoreOption),
+        parseResult.GetValue(followSymlinksOption),
         parseResult.GetValue(watchOption)
     );
 
@@ -53,7 +56,11 @@ static async Task<int> RunAsync(CliArgs parsed)
     bool anyOutput = false;
     var stdout = Console.Out;
 
-    var globOptions = parsed.NoIgnore ? null : new GlobOptions { RespectGitignore = true };
+    var globOptions = new GlobOptions
+    {
+        RespectGitignore = !parsed.NoIgnore,
+        FollowSymlinks = parsed.FollowSymlinks,
+    };
     var excludePathPatterns = parsed.ExcludePathPatterns.Count > 0
         ? parsed.ExcludePathPatterns.Select(p => WildcardPattern.Compile(p)).ToArray()
         : null;
@@ -520,7 +527,6 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
 
             foreach (var file in batch)
             {
-                if (file.Length > baseDir.Length + 4096) continue; // symlink cycle
                 if (!File.Exists(file)) continue;
                 var matchPath = Path.IsPathRooted(parsed.GlobPattern)
                     ? file.Replace('\\', '/')
@@ -542,4 +548,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool Watch);
+record CliArgs(string GlobPattern, string? ContentPattern, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch);

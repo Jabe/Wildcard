@@ -1,3 +1,5 @@
+using System.IO.Enumeration;
+
 namespace Wildcard;
 
 /// <summary>
@@ -11,6 +13,12 @@ public sealed class GlobOptions
     /// Default: false.
     /// </summary>
     public bool RespectGitignore { get; init; }
+
+    /// <summary>
+    /// When true, follows symbolic links during traversal with cycle detection.
+    /// When false (default), symbolic links are skipped — matching ripgrep behavior.
+    /// </summary>
+    public bool FollowSymlinks { get; init; }
 }
 
 /// <summary>
@@ -41,21 +49,81 @@ public sealed class Glob
         public static GlobSegment MakeDoubleStar() => new(GlobSegmentKind.DoubleStar, null, null);
     }
 
+    private readonly record struct DirEntry(string FullPath, bool IsSymlink);
+
     /// <summary>
-    /// Tracks gitignore state during directory traversal.
+    /// Tracks gitignore state and symlink cycle detection during directory traversal.
     /// Discovers git repos on-the-fly and manages per-repo ignore rules.
     /// </summary>
     private sealed class TraversalContext
     {
         public readonly bool DiscoverGitignore;
+        public readonly bool FollowSymlinks;
         public GitignoreFilter? Filter;
         public string? GitRoot;
+        private HashSet<string>? _visitedRealPaths;
 
-        public TraversalContext(bool discoverGitignore, GitignoreFilter? filter, string? gitRoot)
+        public TraversalContext(bool discoverGitignore, GitignoreFilter? filter, string? gitRoot,
+            bool followSymlinks, HashSet<string>? visitedRealPaths = null)
         {
             DiscoverGitignore = discoverGitignore;
             Filter = filter;
             GitRoot = gitRoot;
+            FollowSymlinks = followSymlinks;
+            _visitedRealPaths = visitedRealPaths;
+        }
+
+        public void SeedVisitedPaths(string baseDirectory)
+        {
+            if (!FollowSymlinks) return;
+            _visitedRealPaths = new HashSet<string>(StringComparer.Ordinal) { Path.GetFullPath(baseDirectory) };
+        }
+
+        /// <summary>
+        /// Check if entering a symlinked directory would create a cycle.
+        /// Returns true if safe to enter (not a cycle), false if cycle detected.
+        /// </summary>
+        public bool TryEnterSymlinkedDirectory(string directory)
+        {
+            if (_visitedRealPaths is null) return true;
+
+            string realPath;
+            try
+            {
+                var target = Directory.ResolveLinkTarget(directory, returnFinalTarget: true);
+                realPath = target?.FullName ?? Path.GetFullPath(directory);
+            }
+            catch
+            {
+                realPath = Path.GetFullPath(directory);
+            }
+
+            return _visitedRealPaths.Add(realPath);
+        }
+
+        public void LeaveSymlinkedDirectory(string directory)
+        {
+            if (_visitedRealPaths is null) return;
+
+            try
+            {
+                var target = Directory.ResolveLinkTarget(directory, returnFinalTarget: true);
+                _visitedRealPaths.Remove(target?.FullName ?? Path.GetFullPath(directory));
+            }
+            catch
+            {
+                _visitedRealPaths.Remove(Path.GetFullPath(directory));
+            }
+        }
+
+        public TraversalContext Clone()
+        {
+            return new TraversalContext(
+                DiscoverGitignore,
+                Filter?.Clone(),
+                GitRoot,
+                FollowSymlinks,
+                _visitedRealPaths is not null ? new HashSet<string>(_visitedRealPaths, _visitedRealPaths.Comparer) : null);
         }
 
         /// <summary>
@@ -178,7 +246,10 @@ public sealed class Glob
                 filter = GitignoreFilter.LoadFromGitRoot(gitRoot);
         }
 
-        var ctx = new TraversalContext(respectGitignore, filter, gitRoot);
+        bool followSymlinks = options?.FollowSymlinks == true;
+        var ctx = new TraversalContext(respectGitignore, filter, gitRoot, followSymlinks);
+        if (followSymlinks) ctx.SeedVisitedPaths(baseDir);
+
         foreach (var path in MatchSegments(baseDir, 0, ctx))
             yield return path;
     }
@@ -211,7 +282,10 @@ public sealed class Glob
                 filter = GitignoreFilter.LoadFromGitRoot(gitRoot);
         }
 
-        var ctx = new TraversalContext(respectGitignore, filter, gitRoot);
+        bool followSymlinks = options?.FollowSymlinks == true;
+        var ctx = new TraversalContext(respectGitignore, filter, gitRoot, followSymlinks);
+        if (followSymlinks) ctx.SeedVisitedPaths(baseDir);
+
         WriteMatchesSegments(baseDir, 0, ctx, writer, cancellationToken);
     }
 
@@ -261,7 +335,7 @@ public sealed class Glob
                 WriteBlocking(writer,currentDir);
             else if (Directory.Exists(currentDir))
             {
-                foreach (var file in EnumerateFilesSafe(currentDir))
+                foreach (var file in EnumerateFilesSafe(currentDir, ctx.FollowSymlinks))
                 {
                     if (ctx.IsIgnored(file, false)) continue;
                     WriteBlocking(writer,file);
@@ -294,7 +368,7 @@ public sealed class Glob
             {
                 if (isLast)
                 {
-                    foreach (var file in EnumerateFilesSafe(currentDir))
+                    foreach (var file in EnumerateFilesSafe(currentDir, ctx.FollowSymlinks))
                     {
                         if (seg.Pattern!.IsMatch(Path.GetFileName(file.AsSpan())))
                         {
@@ -305,10 +379,20 @@ public sealed class Glob
                 }
                 else
                 {
-                    foreach (var dir in EnumerateDirectoriesSafe(currentDir))
+                    foreach (var entry in EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks))
                     {
-                        if (seg.Pattern!.IsMatch(Path.GetFileName(dir.AsSpan())) && !ctx.IsIgnored(dir, true))
-                            WriteMatchesSegments(dir, segmentIndex + 1, ctx, writer, ct);
+                        if (seg.Pattern!.IsMatch(Path.GetFileName(entry.FullPath.AsSpan())) && !ctx.IsIgnored(entry.FullPath, true))
+                        {
+                            if (entry.IsSymlink && !ctx.TryEnterSymlinkedDirectory(entry.FullPath)) continue;
+                            try
+                            {
+                                WriteMatchesSegments(entry.FullPath, segmentIndex + 1, ctx, writer, ct);
+                            }
+                            finally
+                            {
+                                if (entry.IsSymlink) ctx.LeaveSymlinkedDirectory(entry.FullPath);
+                            }
+                        }
                     }
                 }
                 break;
@@ -322,35 +406,35 @@ public sealed class Glob
                 WriteMatchesSegmentsCore(currentDir, nextSeg, ctx, writer, ct);
 
                 // One or more levels: parallelize subtree walks
-                var subDirs = EnumerateDirectoriesSafe(currentDir)
-                    .Where(d => !ctx.IsIgnored(d, true))
+                var subDirs = EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks)
+                    .Where(e => !ctx.IsIgnored(e.FullPath, true))
                     .ToArray();
 
                 if (subDirs.Length == 0) break;
 
-                Parallel.ForEach(subDirs, subDir =>
+                Parallel.ForEach(subDirs, entry =>
                 {
-                    // Clone context for each subtree (each thread gets independent gitignore state)
-                    var localCtx = new TraversalContext(
-                        ctx.DiscoverGitignore,
-                        ctx.Filter?.Clone(),
-                        ctx.GitRoot);
+                    // Clone context for each subtree (each thread gets independent gitignore + cycle state)
+                    var localCtx = ctx.Clone();
 
-                    bool enteredRepo = localCtx.TryEnterGitRepo(subDir);
-                    int added = localCtx.EnterDirectory(subDir);
+                    if (entry.IsSymlink && !localCtx.TryEnterSymlinkedDirectory(entry.FullPath)) return;
+
+                    bool enteredRepo = localCtx.TryEnterGitRepo(entry.FullPath);
+                    int added = localCtx.EnterDirectory(entry.FullPath);
                     try
                     {
                         // Match next segment from this subdir
-                        WriteMatchesSegmentsCore(subDir, nextSeg, localCtx, writer, ct);
+                        WriteMatchesSegmentsCore(entry.FullPath, nextSeg, localCtx, writer, ct);
 
                         // Continue recursing deeper (sequential within each subtree)
-                        foreach (var deepDir in EnumerateAllSubdirectoriesFiltered(subDir, localCtx))
+                        foreach (var deepDir in EnumerateAllSubdirectoriesFiltered(entry.FullPath, localCtx))
                             WriteMatchesSegmentsCore(deepDir, nextSeg, localCtx, writer, ct);
                     }
                     finally
                     {
                         localCtx.LeaveDirectory(added);
                         if (enteredRepo) localCtx.LeaveGitRepo();
+                        if (entry.IsSymlink) localCtx.LeaveSymlinkedDirectory(entry.FullPath);
                     }
                 });
                 break;
@@ -443,7 +527,7 @@ public sealed class Glob
                 yield return currentDir;
             else if (Directory.Exists(currentDir))
             {
-                foreach (var file in EnumerateFilesSafe(currentDir))
+                foreach (var file in EnumerateFilesSafe(currentDir, ctx.FollowSymlinks))
                 {
                     if (ctx.IsIgnored(file, false)) continue;
                     yield return file;
@@ -480,7 +564,7 @@ public sealed class Glob
             {
                 if (isLast)
                 {
-                    foreach (var file in EnumerateFilesSafe(currentDir))
+                    foreach (var file in EnumerateFilesSafe(currentDir, ctx.FollowSymlinks))
                     {
                         if (seg.Pattern!.IsMatch(Path.GetFileName(file.AsSpan())))
                         {
@@ -491,14 +575,22 @@ public sealed class Glob
                 }
                 else
                 {
-                    foreach (var dir in EnumerateDirectoriesSafe(currentDir))
+                    foreach (var entry in EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks))
                     {
-                        if (seg.Pattern!.IsMatch(Path.GetFileName(dir.AsSpan())))
+                        if (seg.Pattern!.IsMatch(Path.GetFileName(entry.FullPath.AsSpan())))
                         {
-                            if (!ctx.IsIgnored(dir, true))
+                            if (!ctx.IsIgnored(entry.FullPath, true))
                             {
-                                foreach (var match in MatchSegments(dir, segmentIndex + 1, ctx))
-                                    yield return match;
+                                if (entry.IsSymlink && !ctx.TryEnterSymlinkedDirectory(entry.FullPath)) continue;
+                                try
+                                {
+                                    foreach (var match in MatchSegments(entry.FullPath, segmentIndex + 1, ctx))
+                                        yield return match;
+                                }
+                                finally
+                                {
+                                    if (entry.IsSymlink) ctx.LeaveSymlinkedDirectory(entry.FullPath);
+                                }
                             }
                         }
                     }
@@ -515,21 +607,22 @@ public sealed class Glob
                     yield return match;
 
                 // One or more levels: recurse into subdirectories
-                foreach (var subDir in EnumerateDirectoriesSafe(currentDir))
+                foreach (var entry in EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks))
                 {
-                    if (ctx.IsIgnored(subDir, true)) continue;
+                    if (ctx.IsIgnored(entry.FullPath, true)) continue;
+                    if (entry.IsSymlink && !ctx.TryEnterSymlinkedDirectory(entry.FullPath)) continue;
 
                     // Check if subdir is a new git repo
-                    bool enteredRepo = ctx.TryEnterGitRepo(subDir);
-                    int added = ctx.EnterDirectory(subDir);
+                    bool enteredRepo = ctx.TryEnterGitRepo(entry.FullPath);
+                    int added = ctx.EnterDirectory(entry.FullPath);
                     try
                     {
                         // Try matching next segment from this subdir
-                        foreach (var match in MatchSegmentsCore(subDir, nextSeg, ctx))
+                        foreach (var match in MatchSegmentsCore(entry.FullPath, nextSeg, ctx))
                             yield return match;
 
                         // Continue recursing deeper
-                        foreach (var deepDir in EnumerateAllSubdirectoriesFiltered(subDir, ctx))
+                        foreach (var deepDir in EnumerateAllSubdirectoriesFiltered(entry.FullPath, ctx))
                         {
                             foreach (var match in MatchSegmentsCore(deepDir, nextSeg, ctx))
                                 yield return match;
@@ -539,6 +632,7 @@ public sealed class Glob
                     {
                         ctx.LeaveDirectory(added);
                         if (enteredRepo) ctx.LeaveGitRepo();
+                        if (entry.IsSymlink) ctx.LeaveSymlinkedDirectory(entry.FullPath);
                     }
                 }
                 break;
@@ -549,34 +643,59 @@ public sealed class Glob
     private static IEnumerable<string> EnumerateAllSubdirectoriesFiltered(
         string directory, TraversalContext ctx)
     {
-        if (!ctx.DiscoverGitignore && ctx.Filter is null)
+        if (!ctx.DiscoverGitignore && ctx.Filter is null && !ctx.FollowSymlinks)
         {
-            // No filtering — use fast built-in recursive enumeration
+            // Fast path: no filtering needed, symlinks skipped via ShouldRecurse predicate
             foreach (var dir in EnumerateAllDirectoriesSafe(directory))
                 yield return dir;
             yield break;
         }
 
-        // Manual recursive walk so we can skip ignored directories early
-        foreach (var subDir in EnumerateDirectoriesSafe(directory))
+        // Manual recursive walk for gitignore filtering and symlink cycle detection
+        foreach (var entry in EnumerateDirectoriesSafe(directory, ctx.FollowSymlinks))
         {
-            if (ctx.IsIgnored(subDir, true)) continue;
+            if (ctx.IsIgnored(entry.FullPath, true)) continue;
+            if (entry.IsSymlink && !ctx.TryEnterSymlinkedDirectory(entry.FullPath)) continue;
 
-            bool enteredRepo = ctx.TryEnterGitRepo(subDir);
-            int added = ctx.EnterDirectory(subDir);
+            bool enteredRepo = ctx.TryEnterGitRepo(entry.FullPath);
+            int added = ctx.EnterDirectory(entry.FullPath);
             try
             {
-                yield return subDir;
+                yield return entry.FullPath;
 
-                foreach (var deeper in EnumerateAllSubdirectoriesFiltered(subDir, ctx))
+                foreach (var deeper in EnumerateAllSubdirectoriesFiltered(entry.FullPath, ctx))
                     yield return deeper;
             }
             finally
             {
                 ctx.LeaveDirectory(added);
                 if (enteredRepo) ctx.LeaveGitRepo();
+                if (entry.IsSymlink) ctx.LeaveSymlinkedDirectory(entry.FullPath);
             }
         }
+    }
+
+    private static IEnumerable<string> EnumerateAllDirectoriesSafe(string directory)
+    {
+        try
+        {
+            var options = new EnumerationOptions
+            {
+                IgnoreInaccessible = true,
+                AttributesToSkip = 0,
+                RecurseSubdirectories = true,
+            };
+            return new FileSystemEnumerable<string>(directory,
+                static (ref FileSystemEntry entry) => entry.ToFullPath(),
+                options)
+            {
+                ShouldIncludePredicate = static (ref FileSystemEntry entry) =>
+                    entry.IsDirectory && (entry.Attributes & FileAttributes.ReparsePoint) == 0,
+                ShouldRecursePredicate = static (ref FileSystemEntry entry) =>
+                    (entry.Attributes & FileAttributes.ReparsePoint) == 0
+            };
+        }
+        catch (DirectoryNotFoundException) { return []; }
     }
 
     private static bool ContainsWildcard(string segment)
@@ -589,27 +708,48 @@ public sealed class Glob
         return false;
     }
 
-    private static IEnumerable<string> EnumerateFilesSafe(string directory)
+    private static readonly EnumerationOptions SkipSymlinksOptions = new()
     {
-        try { return Directory.EnumerateFiles(directory); }
-        catch (UnauthorizedAccessException) { return []; }
+        IgnoreInaccessible = true,
+        AttributesToSkip = FileAttributes.ReparsePoint,
+    };
+
+    private static readonly EnumerationOptions FollowSymlinksOptions = new()
+    {
+        IgnoreInaccessible = true,
+        AttributesToSkip = 0,
+    };
+
+    private static IEnumerable<string> EnumerateFilesSafe(string directory, bool followSymlinks)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*",
+                followSymlinks ? FollowSymlinksOptions : SkipSymlinksOptions);
+        }
         catch (DirectoryNotFoundException) { return []; }
-        catch (PathTooLongException) { return []; } // symlink cycle
     }
 
-    private static IEnumerable<string> EnumerateDirectoriesSafe(string directory)
+    private static IEnumerable<DirEntry> EnumerateDirectoriesSafe(string directory, bool followSymlinks)
     {
-        try { return Directory.EnumerateDirectories(directory); }
-        catch (UnauthorizedAccessException) { return []; }
-        catch (DirectoryNotFoundException) { return []; }
-        catch (PathTooLongException) { return []; } // symlink cycle
-    }
+        try
+        {
+            if (followSymlinks)
+            {
+                // Need FileSystemEnumerable to detect which directories are symlinks for cycle detection
+                return new FileSystemEnumerable<DirEntry>(directory,
+                    static (ref FileSystemEntry entry) =>
+                        new DirEntry(entry.ToFullPath(), (entry.Attributes & FileAttributes.ReparsePoint) != 0),
+                    FollowSymlinksOptions)
+                {
+                    ShouldIncludePredicate = static (ref FileSystemEntry entry) => entry.IsDirectory
+                };
+            }
 
-    private static IEnumerable<string> EnumerateAllDirectoriesSafe(string directory)
-    {
-        try { return Directory.EnumerateDirectories(directory, "*", SearchOption.AllDirectories); }
-        catch (UnauthorizedAccessException) { return []; }
+            // Not following symlinks — use fast Directory.EnumerateDirectories, wrap as DirEntry(IsSymlink: false)
+            return Directory.EnumerateDirectories(directory, "*", SkipSymlinksOptions)
+                .Select(static d => new DirEntry(d, false));
+        }
         catch (DirectoryNotFoundException) { return []; }
-        catch (PathTooLongException) { return []; } // symlink cycle
     }
 }

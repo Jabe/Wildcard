@@ -95,6 +95,9 @@ var logs = Glob.Match("/var/log/*.log").ToList();
 // Respect .gitignore — skips bin/, obj/, node_modules/, .git/ etc.
 var tracked = Glob.Match("**/*.cs", options: new GlobOptions { RespectGitignore = true }).ToList();
 
+// Follow symbolic links (off by default, matching ripgrep behavior)
+var withSymlinks = Glob.Match("**/*.cs", options: new GlobOptions { FollowSymlinks = true }).ToList();
+
 // Pre-parsed glob for reuse
 var glob = Glob.Parse("**/*.json");
 foreach (var file in glob.EnumerateMatches("/my/project"))
@@ -129,6 +132,7 @@ wcg <glob> [pattern] [options]
   wcg "**/*.log" "*ERROR*" --watch          Watch for new ERROR lines
   wcg "**/*" "*class*" -X "*test*"          Search, skip test paths
   wcg "**/*.cs" --no-ignore                 Include .gitignore'd files
+  wcg "**/*.cs" -L                          Follow symbolic links
 ```
 
 ## Benchmarks
@@ -189,14 +193,14 @@ Real-world benchmark on `~/Code` (~5.4k .cs files, ~5.3k .json files across mult
 
 | Task | `find` | `grep -r` | `rg` | `wcg` |
 |------|--------|-----------|------|-------|
-| Find all .cs files | 14.7s | — | — | **8.9s** |
-| Find all .json files | 16.8s | — | — | **8.5s** |
-| Deep glob `**/bin/**/*.dll` | 17.2s | — | — | **7.6s** |
-| Search `namespace` in .cs | — | 16.6s | **1.1s** | 4.9s |
-| Search `TODO` in .cs | — | 16.2s | **1.1s** | 5.0s |
-| Case-insensitive `error` in .json | — | 36.7s | **1.0s** | 4.9s |
+| Find all .cs files | 16.6s | — | — | **7.7s** |
+| Find all .json files | 16.7s | — | — | **7.7s** |
+| Deep glob `**/bin/**/*.dll` | 17.2s | — | — | **5.9s** |
+| Search `namespace` in .cs | — | 16.4s | **1.1s** | 2.7s |
+| Search `TODO` in .cs | — | 16.7s | **1.1s** | 2.7s |
+| Case-insensitive `error` in .json | — | 40.5s | **1.0s** | 2.6s |
 
-`wcg` beats `find` by **~2x** for file discovery and `grep` by **~3x** for content search. `.gitignore` filtering (on by default) prunes `bin/`, `obj/`, `node_modules/` etc. during traversal. Parallelized content scanning overlaps glob enumeration with file I/O.
+`wcg` beats `find` by **~2x** for file discovery and `grep` by **~6x** for content search. `.gitignore` filtering (on by default) prunes `bin/`, `obj/`, `node_modules/` etc. during traversal. Parallelized content scanning overlaps glob enumeration with file I/O. Symbolic links are skipped by default, avoiding unnecessary traversal.
 
 `ripgrep` remains the fastest content search tool thanks to SIMD-accelerated string matching and parallel directory walking.
 
