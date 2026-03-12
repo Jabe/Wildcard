@@ -32,7 +32,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
     var parsed = new CliArgs(
         parseResult.GetValue(globArg)!,
         [.. (parseResult.GetValue(patternArg) ?? []).Select(NormalizeContentPattern)],
-        [.. parseResult.GetValue(excludeOption) ?? []],
+        [.. (parseResult.GetValue(excludeOption) ?? []).Select(NormalizeContentPattern)],
         [.. parseResult.GetValue(excludePathOption) ?? []],
         parseResult.GetValue(ignoreCaseOption),
         parseResult.GetValue(filesOnlyOption),
