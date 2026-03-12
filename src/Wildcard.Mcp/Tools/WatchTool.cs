@@ -9,7 +9,7 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class WatchTool
 {
-    [McpServerTool(Name = "wildcard_watch"), Description("Watch for file changes matching a glob pattern for a bounded duration. Returns a summary of all changes detected. Optionally filter changes by content patterns.")]
+    [McpServerTool(Name = "wildcard_watch"), Description("fswatch but actually useful. Watch for file changes matching a glob pattern for a bounded duration — returns a summary of creates/modifies/deletes. Great for monitoring builds, tests, or deploys in real time.")]
     public static async Task<string> Watch(
         [Description("Glob pattern for files to watch (e.g. \"**/*.log\", \"src/**/*.cs\")")] string pattern,
         [Description("Base directory to watch in (defaults to current working directory)")] string? base_directory = null,

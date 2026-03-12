@@ -8,7 +8,7 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class GlobTool
 {
-    [McpServerTool(Name = "wildcard_glob"), Description("Find files matching a glob pattern. Ultra-fast, respects .gitignore. Supports ** for recursive matching, * for wildcards, ? for single char, [abc] for character classes.")]
+    [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files by glob pattern — blazing fast, respects .gitignore, supports count mode. Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes.")]
     public static string Glob(
         [Description("Glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"*.json\")")] string pattern,
         [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,

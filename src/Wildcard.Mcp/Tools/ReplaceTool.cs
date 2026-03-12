@@ -9,7 +9,7 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class ReplaceTool
 {
-    [McpServerTool(Name = "wildcard_replace"), Description("Find and replace text across files matching a glob pattern. Uses memory-mapped I/O for fast file filtering, then applies replacements. Dry-run by default — set dry_run=false to write changes to disk.")]
+    [McpServerTool(Name = "wildcard_replace"), Description("sed wishes it could. Find-and-replace across files with glob patterns — dry-run preview by default, atomic writes, capture groups ($1/$2). Way safer than regex-in-bash. Set dry_run=false to actually write.")]
     public static string Replace(
         [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\")")] string pattern,
         [Description("Text to find — plain string for literal match, or wildcard pattern with * ? [] for capture-group replacement")] string find,
