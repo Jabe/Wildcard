@@ -396,18 +396,18 @@ public sealed class Glob
     /// Parallelizes subtree traversal at <c>**</c> boundaries for maximum throughput.
     /// </summary>
     public void WriteMatchesToChannel(System.Threading.Channels.ChannelWriter<string> writer,
-        GlobOptions? options = null, CancellationToken cancellationToken = default)
+        string? baseDirectory = null, GlobOptions? options = null, CancellationToken cancellationToken = default)
     {
         if (_variants is not null)
         {
             var seen = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
             var deduplicatingWriter = new DeduplicatingChannelWriter(writer, seen);
             foreach (var variant in _variants)
-                variant.WriteMatchesToChannel(deduplicatingWriter, options, cancellationToken);
+                variant.WriteMatchesToChannel(deduplicatingWriter, baseDirectory, options, cancellationToken);
             return;
         }
 
-        var baseDir = _root ?? Directory.GetCurrentDirectory();
+        var baseDir = (baseDirectory is not null ? Path.GetFullPath(baseDirectory) : null) ?? _root ?? Directory.GetCurrentDirectory();
         if (_segments.Length == 0) return;
 
         GitignoreFilter? filter = null;
@@ -431,9 +431,9 @@ public sealed class Glob
     /// Convenience: parse and write matches to a channel in one call.
     /// </summary>
     public static void MatchToChannel(string pattern, System.Threading.Channels.ChannelWriter<string> writer,
-        GlobOptions? options = null, CancellationToken cancellationToken = default)
+        string? baseDirectory = null, GlobOptions? options = null, CancellationToken cancellationToken = default)
     {
-        Parse(pattern).WriteMatchesToChannel(writer, options, cancellationToken);
+        Parse(pattern).WriteMatchesToChannel(writer, baseDirectory, options, cancellationToken);
     }
 
     /// <summary>

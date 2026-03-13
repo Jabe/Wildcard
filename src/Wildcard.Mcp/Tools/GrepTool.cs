@@ -79,7 +79,7 @@ public static class GrepTool
             try
             {
                 var glob = Wildcard.Glob.Parse(pattern);
-                glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
+                glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
             }
             finally { fileChannel.Writer.Complete(); }
         }, cancellationToken);
@@ -142,7 +142,7 @@ public static class GrepTool
                 else
                 {
                     var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
                 }
             }
             finally { fileChannel.Writer.Complete(); }
@@ -238,7 +238,7 @@ public static class GrepTool
                 else
                 {
                     var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
                 }
             }
             finally { fileChannel.Writer.Complete(); }
@@ -350,7 +350,7 @@ public static class GrepTool
                 else
                 {
                     var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
                 }
             }
             finally { fileChannel.Writer.Complete(); }

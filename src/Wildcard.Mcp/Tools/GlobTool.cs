@@ -34,7 +34,7 @@ public static class GlobTool
         var channel = Channel.CreateUnbounded<string>();
         var producer = Task.Run(() =>
         {
-            try { Wildcard.Glob.MatchToChannel(pattern, channel.Writer, options, cancellationToken); }
+            try { Wildcard.Glob.MatchToChannel(pattern, channel.Writer, baseDir, options, cancellationToken); }
             finally { channel.Writer.TryComplete(); }
         }, cancellationToken);
 
