@@ -85,7 +85,8 @@ public static class GrepTool
         }, cancellationToken);
 
         var outputLock = new object();
-        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
+        var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), parallelOpts, file =>
         {
             var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
             if (IsPathExcluded(relPath, excludePathPatterns)) return;
@@ -149,7 +150,8 @@ public static class GrepTool
         }, cancellationToken);
 
         var outputLock = new object();
-        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
+        var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), parallelOpts, file =>
         {
             var fileMatches = matcher.Scan(file);
             if (fileMatches.Count == 0) return;
@@ -245,7 +247,8 @@ public static class GrepTool
         }, cancellationToken);
 
         var outputLock = new object();
-        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
+        var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), parallelOpts, file =>
         {
             var contextLines = matcher.ScanWithContext(beforeContext, afterContext, file);
             if (contextLines.Count == 0) return;
@@ -357,7 +360,8 @@ public static class GrepTool
         }, cancellationToken);
 
         var outputLock = new object();
-        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
+        var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), parallelOpts, file =>
         {
             var fileMatches = matcher.Scan(file);
             if (fileMatches.Count == 0) return;

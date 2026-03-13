@@ -3,6 +3,9 @@ using System.Text;
 using System.Threading.Channels;
 using Wildcard;
 
+// Prevent thread pool ramp-up delay for I/O-bound parallel workloads
+ThreadPool.SetMinThreads(Environment.ProcessorCount * 2, Environment.ProcessorCount);
+
 var globArg = new Argument<string>("glob") { Description = "File glob pattern (e.g. \"src/**/*.cs\", \"**/*.{cs,razor,css}\")" };
 var patternArg = new Argument<string[]>("pattern") { Description = "Content search pattern(s) — multiple patterns are OR'd (e.g. ERROR WARN). Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\").", Arity = ArgumentArity.ZeroOrMore };
 
@@ -291,7 +294,8 @@ static async Task<int> RunAsync(CliArgs parsed)
         int totalFiles = 0;
         var countLock = new object();
 
-        await Parallel.ForEachAsync(countChannel.Reader.ReadAllAsync(), async (file, _) =>
+        var countParallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        await Parallel.ForEachAsync(countChannel.Reader.ReadAllAsync(), countParallelOpts, async (file, _) =>
         {
             await Task.CompletedTask;
             var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
@@ -344,7 +348,8 @@ static async Task<int> RunAsync(CliArgs parsed)
             finally { filesOnlyChannel.Writer.Complete(); }
         });
         var filesOnlyLock = new object();
-        await Parallel.ForEachAsync(filesOnlyChannel.Reader.ReadAllAsync(), async (file, _) =>
+        var filesOnlyParallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        await Parallel.ForEachAsync(filesOnlyChannel.Reader.ReadAllAsync(), filesOnlyParallelOpts, async (file, _) =>
         {
             await Task.CompletedTask;
             var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
@@ -407,7 +412,8 @@ static async Task<int> RunAsync(CliArgs parsed)
     // Consumer: parallel workers scan files and write atomic output blocks
     bool hasContext = parsed.BeforeContext > 0 || parsed.AfterContext > 0;
     var outputLock = new object();
-    await Parallel.ForEachAsync(fileChannel.Reader.ReadAllAsync(), async (file, _) =>
+    var scanParallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+    await Parallel.ForEachAsync(fileChannel.Reader.ReadAllAsync(), scanParallelOpts, async (file, _) =>
     {
         await Task.CompletedTask; // satisfy async signature
 

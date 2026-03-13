@@ -240,7 +240,8 @@ public static class NativeVsWildcardRunner
             finally { channel.Writer.Complete(); }
         });
         int count = 0;
-        await Parallel.ForEachAsync(channel.Reader.ReadAllAsync(), async (file, _) =>
+        var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        await Parallel.ForEachAsync(channel.Reader.ReadAllAsync(), parallelOpts, async (file, _) =>
         {
             await Task.CompletedTask;
             if (matcher.ContainsMatch(file))
