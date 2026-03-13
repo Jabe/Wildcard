@@ -10,7 +10,7 @@ namespace Wildcard.Mcp.Tools;
 public static class ReplaceTool
 {
     [McpServerTool(Name = "wildcard_replace"), Description("sed wishes it could. Find-and-replace across files with glob patterns — dry-run preview by default, atomic writes, capture groups ($1/$2). Way safer than regex-in-bash. Set dry_run=false to actually write.")]
-    public static string Replace(
+    public static async Task<string> Replace(
         [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Text to find — plain string for literal match, or wildcard pattern with * ? [] for capture-group replacement")] string find,
         [Description("Replacement text (use $1, $2 for capture groups when find contains wildcards)")] string replace,
@@ -20,7 +20,8 @@ public static class ReplaceTool
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
         [Description("Preview only, don't write changes (default: true)")] bool dry_run = true,
-        [Description("Maximum number of files to process (default: 50)")] int limit = 50)
+        [Description("Maximum number of files to process (default: 50)")] int limit = 50,
+        CancellationToken cancellationToken = default)
     {
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var globOptions = new GlobOptions
@@ -32,88 +33,92 @@ public static class ReplaceTool
         if (string.IsNullOrEmpty(find))
             return "Error: find string cannot be empty.";
 
-        // Normalize find pattern for file matching (auto-wrap plain words as *word*)
-        var normalizedFind = NormalizeContentPattern(find);
-
-        WildcardPattern[]? excludePathPatterns = null;
-        if (exclude_paths is { Length: > 0 })
-            excludePathPatterns = exclude_paths.Select(p => WildcardPattern.Compile(p)).ToArray();
-
-        var matcher = FilePathMatcher.Create(
-            include: [normalizedFind],
-            options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
-
-        // Find files with matches
-        var matchingFiles = new List<string>();
-        foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+        return await Task.Run(() =>
         {
-            if (matchingFiles.Count >= limit) break;
-            var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
-            if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-            if (matcher.ContainsMatch(file))
-                matchingFiles.Add(file);
-        }
+            // Normalize find pattern for file matching (auto-wrap plain words as *word*)
+            var normalizedFind = NormalizeContentPattern(find);
 
-        if (matchingFiles.Count == 0)
-            return "No matching files found.";
+            WildcardPattern[]? excludePathPatterns = null;
+            if (exclude_paths is { Length: > 0 })
+                excludePathPatterns = exclude_paths.Select(p => WildcardPattern.Compile(p)).ToArray();
 
-        // Run replacement
-        var results = dry_run
-            ? FileReplacer.Preview(matchingFiles.ToArray(), find, replace, ignore_case)
-            : FileReplacer.Apply(matchingFiles.ToArray(), find, replace, ignore_case);
+            var matcher = FilePathMatcher.Create(
+                include: [normalizedFind],
+                options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
 
-        if (results.Count == 0)
-            return "No replacements found.";
-
-        var sb = new StringBuilder();
-        int totalReplacements = 0;
-        int filesChanged = 0;
-        bool anyOutput = false;
-
-        int errors = 0;
-        foreach (var result in results)
-        {
-            if (result.Error is not null)
+            // Find files with matches
+            var matchingFiles = new List<string>();
+            foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
             {
-                errors++;
-                var relPath = Path.GetRelativePath(baseDir, result.FilePath).Replace('\\', '/');
-                if (anyOutput) sb.AppendLine();
+                cancellationToken.ThrowIfCancellationRequested();
+                if (matchingFiles.Count >= limit) break;
+                var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+                if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                if (matcher.ContainsMatch(file))
+                    matchingFiles.Add(file);
+            }
+
+            if (matchingFiles.Count == 0)
+                return "No matching files found.";
+
+            // Run replacement
+            var results = dry_run
+                ? FileReplacer.Preview(matchingFiles.ToArray(), find, replace, ignore_case)
+                : FileReplacer.Apply(matchingFiles.ToArray(), find, replace, ignore_case);
+
+            if (results.Count == 0)
+                return "No replacements found.";
+
+            var sb = new StringBuilder();
+            int totalReplacements = 0;
+            int filesChanged = 0;
+            bool anyOutput = false;
+
+            int errors = 0;
+            foreach (var result in results)
+            {
+                if (result.Error is not null)
+                {
+                    errors++;
+                    var relPath = Path.GetRelativePath(baseDir, result.FilePath).Replace('\\', '/');
+                    if (anyOutput) sb.AppendLine();
+                    anyOutput = true;
+                    sb.AppendLine($"{relPath}: ERROR — {result.Error}");
+                    continue;
+                }
+
+                if (result.Replacements.Count == 0) continue;
+                filesChanged++;
+                totalReplacements += result.Replacements.Count;
+
+                var relPath2 = Path.GetRelativePath(baseDir, result.FilePath).Replace('\\', '/');
+                int width = result.Replacements[^1].LineNumber.ToString().Length;
+
+                if (anyOutput)
+                    sb.AppendLine();
                 anyOutput = true;
-                sb.AppendLine($"{relPath}: ERROR — {result.Error}");
-                continue;
+
+                sb.AppendLine($"{relPath2} ({result.Replacements.Count} replacement{(result.Replacements.Count > 1 ? "s" : "")})");
+
+                foreach (var r in result.Replacements)
+                {
+                    var lineNum = r.LineNumber.ToString().PadLeft(width);
+                    sb.AppendLine($"  {lineNum}: - {r.OriginalLine}");
+                    sb.AppendLine($"  {lineNum}: + {r.ReplacedLine}");
+                }
             }
 
-            if (result.Replacements.Count == 0) continue;
-            filesChanged++;
-            totalReplacements += result.Replacements.Count;
+            sb.AppendLine();
+            if (dry_run)
+                sb.AppendLine($"Summary: {totalReplacements} replacement{(totalReplacements > 1 ? "s" : "")} in {filesChanged} file{(filesChanged > 1 ? "s" : "")} (dry-run)");
+            else
+                sb.AppendLine($"Summary: {totalReplacements} replacement{(totalReplacements > 1 ? "s" : "")} applied in {filesChanged} file{(filesChanged > 1 ? "s" : "")}.");
 
-            var relPath2 = Path.GetRelativePath(baseDir, result.FilePath).Replace('\\', '/');
-            int width = result.Replacements[^1].LineNumber.ToString().Length;
+            if (errors > 0)
+                sb.AppendLine($"{errors} file{(errors > 1 ? "s" : "")} failed (see errors above).");
 
-            if (anyOutput)
-                sb.AppendLine();
-            anyOutput = true;
-
-            sb.AppendLine($"{relPath2} ({result.Replacements.Count} replacement{(result.Replacements.Count > 1 ? "s" : "")})");
-
-            foreach (var r in result.Replacements)
-            {
-                var lineNum = r.LineNumber.ToString().PadLeft(width);
-                sb.AppendLine($"  {lineNum}: - {r.OriginalLine}");
-                sb.AppendLine($"  {lineNum}: + {r.ReplacedLine}");
-            }
-        }
-
-        sb.AppendLine();
-        if (dry_run)
-            sb.AppendLine($"Summary: {totalReplacements} replacement{(totalReplacements > 1 ? "s" : "")} in {filesChanged} file{(filesChanged > 1 ? "s" : "")} (dry-run)");
-        else
-            sb.AppendLine($"Summary: {totalReplacements} replacement{(totalReplacements > 1 ? "s" : "")} applied in {filesChanged} file{(filesChanged > 1 ? "s" : "")}.");
-
-        if (errors > 0)
-            sb.AppendLine($"{errors} file{(errors > 1 ? "s" : "")} failed (see errors above).");
-
-        return sb.ToString();
+            return sb.ToString();
+        }, cancellationToken);
     }
 
     private static string NormalizeContentPattern(string pattern)

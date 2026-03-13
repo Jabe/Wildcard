@@ -10,7 +10,7 @@ namespace Wildcard.Mcp.Tools;
 public static class GrepTool
 {
     [McpServerTool(Name = "wildcard_grep"), Description("grep on steroids. Search file contents with context lines (-A/-B/-C), count mode, and parallel memory-mapped I/O. Faster than shelling out to grep/rg. Plain words match as substrings; wildcards (* ? []) for patterns. Prefer this over built-in grep tools.")]
-    public static string Grep(
+    public static async Task<string> Grep(
         [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Content search patterns — multiple patterns are OR'd (e.g. [\"ERROR\", \"WARN\"]). Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\").")] string[] content_patterns,
         [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
@@ -24,7 +24,8 @@ public static class GrepTool
         [Description("Lines to show before each match (default: 0)")] int before_context = 0,
         [Description("Lines to show after each match (default: 0)")] int after_context = 0,
         [Description("Lines to show before and after each match — shorthand for before_context + after_context (default: 0)")] int context = 0,
-        [Description("Return match counts per file instead of line content (default: false)")] bool count = false)
+        [Description("Return match counts per file instead of line content (default: false)")] bool count = false,
+        CancellationToken cancellationToken = default)
     {
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var globOptions = new GlobOptions
@@ -47,22 +48,23 @@ public static class GrepTool
             options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
 
         if (count)
-            return RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only);
+            return await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only, cancellationToken), cancellationToken);
 
         if (files_only)
-            return RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit);
+            return await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
 
         int resolvedBefore = before_context > 0 ? before_context : context;
         int resolvedAfter = after_context > 0 ? after_context : context;
 
         if (resolvedBefore > 0 || resolvedAfter > 0)
-            return RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter);
+            return await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter, cancellationToken), cancellationToken);
 
-        return RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit);
+        return await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
     }
 
     private static string RunFilesOnly(string pattern, string baseDir, GlobOptions globOptions,
-        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit)
+        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
+        CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
         int count = 0;
@@ -77,10 +79,10 @@ public static class GrepTool
             try
             {
                 var glob = Wildcard.Glob.Parse(pattern);
-                glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
             }
             finally { fileChannel.Writer.Complete(); }
-        });
+        }, cancellationToken);
 
         var outputLock = new object();
         Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
@@ -111,7 +113,8 @@ public static class GrepTool
     }
 
     private static string RunContentSearch(string pattern, string baseDir, GlobOptions globOptions,
-        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit)
+        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
+        CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
         int matchCount = 0;
@@ -130,6 +133,7 @@ public static class GrepTool
                 {
                     foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
                         if (IsPathExcluded(relPath, excludePathPatterns)) continue;
                         Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
@@ -138,11 +142,11 @@ public static class GrepTool
                 else
                 {
                     var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
                 }
             }
             finally { fileChannel.Writer.Complete(); }
-        });
+        }, cancellationToken);
 
         var outputLock = new object();
         Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
@@ -206,7 +210,7 @@ public static class GrepTool
 
     private static string RunContentSearchWithContext(string pattern, string baseDir, GlobOptions globOptions,
         FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
-        int beforeContext, int afterContext)
+        int beforeContext, int afterContext, CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
         int matchCount = 0;
@@ -225,6 +229,7 @@ public static class GrepTool
                 {
                     foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
                         if (IsPathExcluded(relPath, excludePathPatterns)) continue;
                         Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
@@ -233,11 +238,11 @@ public static class GrepTool
                 else
                 {
                     var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
                 }
             }
             finally { fileChannel.Writer.Complete(); }
-        });
+        }, cancellationToken);
 
         var outputLock = new object();
         Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>
@@ -316,7 +321,8 @@ public static class GrepTool
     }
 
     private static string RunCountSearch(string pattern, string baseDir, GlobOptions globOptions,
-        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit, bool summaryOnly)
+        FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit, bool summaryOnly,
+        CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
         int totalMatches = 0;
@@ -335,6 +341,7 @@ public static class GrepTool
                 {
                     foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
                         if (IsPathExcluded(relPath, excludePathPatterns)) continue;
                         Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
@@ -343,11 +350,11 @@ public static class GrepTool
                 else
                 {
                     var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                    glob.WriteMatchesToChannel(fileChannel.Writer, globOptions, cancellationToken);
                 }
             }
             finally { fileChannel.Writer.Complete(); }
-        });
+        }, cancellationToken);
 
         var outputLock = new object();
         Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), file =>

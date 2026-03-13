@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using System.Threading.Channels;
 using ModelContextProtocol.Server;
 using Wildcard;
 
@@ -9,14 +10,15 @@ namespace Wildcard.Mcp.Tools;
 public static class GlobTool
 {
     [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files by glob pattern — blazing fast, respects .gitignore, supports count mode. Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes, {a,b,c} brace expansion.")]
-    public static string Glob(
+    public static async Task<string> Glob(
         [Description("Glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
         [Description("Glob patterns to exclude file paths (e.g. \"**/node_modules/**\")")] string[]? exclude_paths = null,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
         [Description("Maximum number of results to return (default: 10000)")] int limit = 10000,
-        [Description("Return only the count of matching files, not the file paths (default: false)")] bool count = false)
+        [Description("Return only the count of matching files, not the file paths (default: false)")] bool count = false,
+        CancellationToken cancellationToken = default)
     {
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var options = new GlobOptions
@@ -29,10 +31,17 @@ public static class GlobTool
         if (exclude_paths is { Length: > 0 })
             excludePatterns = exclude_paths.Select(p => WildcardPattern.Compile(p)).ToArray();
 
+        var channel = Channel.CreateUnbounded<string>();
+        var producer = Task.Run(() =>
+        {
+            try { Wildcard.Glob.MatchToChannel(pattern, channel.Writer, options, cancellationToken); }
+            finally { channel.Writer.TryComplete(); }
+        }, cancellationToken);
+
         var sb = new StringBuilder();
         int matched = 0;
 
-        foreach (var file in Wildcard.Glob.Match(pattern, baseDir, options))
+        await foreach (var file in channel.Reader.ReadAllAsync(cancellationToken))
         {
             var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
 
@@ -48,10 +57,10 @@ public static class GlobTool
 
             matched++;
             if (!count && matched <= limit)
-            {
                 sb.AppendLine(relPath);
-            }
         }
+
+        await producer;
 
         if (matched == 0)
             return "No files found.";
