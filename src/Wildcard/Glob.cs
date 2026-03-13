@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Enumeration;
 
 namespace Wildcard;
@@ -571,38 +572,79 @@ public sealed class Glob
                 // Zero levels: match next segment from current directory
                 WriteMatchesSegmentsCore(currentDir, nextSeg, ctx, writer, ct);
 
-                // One or more levels: parallelize subtree walks
+                // Work-stealing parallel walk: seed a shared queue with immediate subdirectories,
+                // fixed worker pool processes each dir and re-enqueues discovered subdirs.
+                // This distributes work across all cores even for deep/unbalanced trees,
+                // unlike the previous approach which forked once and went sequential per subtree.
                 var subDirs = EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks)
                     .Where(e => !ctx.IsIgnored(e.FullPath, true))
                     .ToArray();
 
                 if (subDirs.Length == 0) break;
 
-                Parallel.ForEach(subDirs, entry =>
+                var workQueue = new ConcurrentQueue<(string Dir, TraversalContext Ctx)>();
+                int outstandingWork = 0;
+                using var done = new ManualResetEventSlim(false);
+
+                // Seed with immediate subdirectories — each gets an independent context clone
+                foreach (var entry in subDirs)
                 {
-                    // Clone context for each subtree (each thread gets independent gitignore + cycle state)
                     var localCtx = ctx.Clone();
+                    if (entry.IsSymlink && !localCtx.TryEnterSymlinkedDirectory(entry.FullPath)) continue;
+                    localCtx.TryEnterGitRepo(entry.FullPath);
+                    localCtx.EnterDirectory(entry.FullPath);
+                    Interlocked.Increment(ref outstandingWork);
+                    workQueue.Enqueue((entry.FullPath, localCtx));
+                }
 
-                    if (entry.IsSymlink && !localCtx.TryEnterSymlinkedDirectory(entry.FullPath)) return;
+                if (outstandingWork == 0) break;
 
-                    bool enteredRepo = localCtx.TryEnterGitRepo(entry.FullPath);
-                    int added = localCtx.EnterDirectory(entry.FullPath);
-                    try
+                int workerCount = Environment.ProcessorCount;
+                var workers = new Task[workerCount];
+                for (int w = 0; w < workerCount; w++)
+                {
+                    workers[w] = Task.Run(() =>
                     {
-                        // Match next segment from this subdir
-                        WriteMatchesSegmentsCore(entry.FullPath, nextSeg, localCtx, writer, ct);
+                        var spinner = new SpinWait();
+                        while (!done.IsSet)
+                        {
+                            if (workQueue.TryDequeue(out var item))
+                            {
+                                spinner.Reset();
+                                var (dir, dirCtx) = item;
+                                try
+                                {
+                                    // Match next segment from this directory
+                                    WriteMatchesSegmentsCore(dir, nextSeg, dirCtx, writer, ct);
 
-                        // Continue recursing deeper (sequential within each subtree)
-                        foreach (var deepDir in EnumerateAllSubdirectoriesFiltered(entry.FullPath, localCtx))
-                            WriteMatchesSegmentsCore(deepDir, nextSeg, localCtx, writer, ct);
-                    }
-                    finally
-                    {
-                        localCtx.LeaveDirectory(added);
-                        if (enteredRepo) localCtx.LeaveGitRepo();
-                        if (entry.IsSymlink) localCtx.LeaveSymlinkedDirectory(entry.FullPath);
-                    }
-                });
+                                    // Discover subdirectories and enqueue for any idle worker to pick up
+                                    foreach (var subEntry in EnumerateDirectoriesSafe(dir, dirCtx.FollowSymlinks))
+                                    {
+                                        if (dirCtx.IsIgnored(subEntry.FullPath, true)) continue;
+                                        var subCtx = dirCtx.Clone();
+                                        if (subEntry.IsSymlink && !subCtx.TryEnterSymlinkedDirectory(subEntry.FullPath)) continue;
+                                        subCtx.TryEnterGitRepo(subEntry.FullPath);
+                                        subCtx.EnterDirectory(subEntry.FullPath);
+                                        Interlocked.Increment(ref outstandingWork);
+                                        workQueue.Enqueue((subEntry.FullPath, subCtx));
+                                    }
+                                }
+                                finally
+                                {
+                                    if (Interlocked.Decrement(ref outstandingWork) == 0)
+                                        done.Set();
+                                }
+                            }
+                            else
+                            {
+                                spinner.SpinOnce();
+                            }
+                        }
+                    }, ct);
+                }
+
+                done.Wait(ct);
+                Task.WaitAll(workers);
                 break;
             }
         }
