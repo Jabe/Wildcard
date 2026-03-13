@@ -191,9 +191,16 @@ public sealed class FilePathMatcher
             return false;
 
         long fileLength = fileInfo.Length;
+
+        if (fileLength <= BufferedReadThreshold)
+        {
+            var results = new List<LineMatch>();
+            ScanFileBuffered(filePath, (int)fileLength, results);
+            return results.Count > 0;
+        }
+
         if (fileLength > int.MaxValue)
         {
-            // For very large files, fall back to Scan and check count
             var results = new List<LineMatch>();
             ScanFileLargeMapped(filePath, fileLength, results);
             return results.Count > 0;
@@ -395,6 +402,10 @@ public sealed class FilePathMatcher
             return result;
         }
 
+        // Small files: buffered read
+        if (fileLength <= BufferedReadThreshold)
+            return ScanFileWithContextFromSpan(filePath, (int)fileLength, beforeContext, afterContext);
+
         using var mmf = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
         using var accessor = mmf.CreateViewAccessor(0, fileLength, MemoryMappedFileAccess.Read);
 
@@ -404,33 +415,54 @@ public sealed class FilePathMatcher
         {
             ptr += accessor.PointerOffset;
             var fileSpan = new ReadOnlySpan<byte>(ptr, (int)fileLength);
-
-            int bomOffset = 0;
-            if (fileSpan.Length >= 3 && fileSpan[0] == 0xEF && fileSpan[1] == 0xBB && fileSpan[2] == 0xBF)
-                bomOffset = 3;
-
-            var data = fileSpan[bomOffset..];
-
-            // Pass 1: find all matching line numbers
-            var matchResults = new List<LineMatch>();
-            ScanBytes(filePath, data, matchResults);
-            if (matchResults.Count == 0)
-                return [];
-
-            var matchLineNumbers = new HashSet<int>(matchResults.Count);
-            foreach (var m in matchResults)
-                matchLineNumbers.Add(m.LineNumber);
-
-            // Compute merged context intervals
-            var intervals = MergeContextIntervals(matchResults, beforeContext, afterContext);
-
-            // Pass 2: collect all lines within context intervals
-            return CollectContextLines(filePath, data, matchLineNumbers, intervals);
+            return ScanContextFromData(filePath, fileSpan, beforeContext, afterContext);
         }
         finally
         {
             accessor.SafeMemoryMappedViewHandle.ReleasePointer();
         }
+    }
+
+    private List<ContextLine> ScanFileWithContextFromSpan(string filePath, int fileLength, int beforeContext, int afterContext)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(fileLength);
+        try
+        {
+            int bytesRead;
+            using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: fileLength, FileOptions.SequentialScan))
+                bytesRead = fs.Read(buffer, 0, fileLength);
+
+            return ScanContextFromData(filePath, buffer.AsSpan(0, bytesRead), beforeContext, afterContext);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private List<ContextLine> ScanContextFromData(string filePath, ReadOnlySpan<byte> fileSpan, int beforeContext, int afterContext)
+    {
+        int bomOffset = 0;
+        if (fileSpan.Length >= 3 && fileSpan[0] == 0xEF && fileSpan[1] == 0xBB && fileSpan[2] == 0xBF)
+            bomOffset = 3;
+
+        var data = fileSpan[bomOffset..];
+
+        // Pass 1: find all matching line numbers
+        var matchResults = new List<LineMatch>();
+        ScanBytes(filePath, data, matchResults);
+        if (matchResults.Count == 0)
+            return [];
+
+        var matchLineNumbers = new HashSet<int>(matchResults.Count);
+        foreach (var m in matchResults)
+            matchLineNumbers.Add(m.LineNumber);
+
+        // Compute merged context intervals
+        var intervals = MergeContextIntervals(matchResults, beforeContext, afterContext);
+
+        // Pass 2: collect all lines within context intervals
+        return CollectContextLines(filePath, data, matchLineNumbers, intervals);
     }
 
     private static List<(int Start, int End)> MergeContextIntervals(
@@ -528,7 +560,14 @@ public sealed class FilePathMatcher
         return results;
     }
 
-    // --- Core: scan a single file using memory-mapped I/O ---
+    // --- Core: scan a single file ---
+
+    /// <summary>
+    /// Files at or below this size use buffered reads instead of memory-mapped I/O.
+    /// Avoids per-file mmap kernel overhead (VMA setup, page tables, TLB entries) for small files,
+    /// which are the vast majority in typical codebases.
+    /// </summary>
+    private const long BufferedReadThreshold = 64 * 1024;
 
     private void ScanFile(string filePath, List<LineMatch> results)
     {
@@ -538,7 +577,11 @@ public sealed class FilePathMatcher
 
         long fileLength = fileInfo.Length;
 
-        if (fileLength <= int.MaxValue)
+        if (fileLength <= BufferedReadThreshold)
+        {
+            ScanFileBuffered(filePath, (int)fileLength, results);
+        }
+        else if (fileLength <= int.MaxValue)
         {
             ScanFileMemoryMapped(filePath, fileLength, results);
         }
@@ -546,6 +589,30 @@ public sealed class FilePathMatcher
         {
             // Files > 2GB: scan in sections
             ScanFileLargeMapped(filePath, fileLength, results);
+        }
+    }
+
+    private void ScanFileBuffered(string filePath, int fileLength, List<LineMatch> results)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(fileLength);
+        try
+        {
+            int bytesRead;
+            using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: fileLength, FileOptions.SequentialScan))
+                bytesRead = fs.Read(buffer, 0, fileLength);
+
+            var data = buffer.AsSpan(0, bytesRead);
+
+            // Detect and skip UTF-8 BOM
+            int bomOffset = 0;
+            if (data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
+                bomOffset = 3;
+
+            ScanBytes(filePath, data[bomOffset..], results);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
