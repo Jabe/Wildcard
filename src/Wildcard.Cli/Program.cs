@@ -282,7 +282,7 @@ static async Task<int> RunAsync(CliArgs parsed)
             try
             {
                 var glob = Glob.Parse(parsed.GlobPattern);
-                glob.WriteMatchesToChannel(countChannel.Writer, globOptions);
+                glob.WriteMatchesToChannel(countChannel.Writer, options: globOptions);
             }
             finally { countChannel.Writer.Complete(); }
         });
@@ -339,7 +339,7 @@ static async Task<int> RunAsync(CliArgs parsed)
             try
             {
                 var glob = Glob.Parse(parsed.GlobPattern);
-                glob.WriteMatchesToChannel(filesOnlyChannel.Writer, globOptions);
+                glob.WriteMatchesToChannel(filesOnlyChannel.Writer, options: globOptions);
             }
             finally { filesOnlyChannel.Writer.Complete(); }
         });
@@ -398,7 +398,7 @@ static async Task<int> RunAsync(CliArgs parsed)
             {
                 // No path exclusions: use parallel glob walker
                 var glob = Glob.Parse(parsed.GlobPattern);
-                glob.WriteMatchesToChannel(fileChannel.Writer, globOptions);
+                glob.WriteMatchesToChannel(fileChannel.Writer, options: globOptions);
             }
         }
         finally { fileChannel.Writer.Complete(); }
