@@ -359,7 +359,7 @@ public sealed class Glob
             yield break;
         }
 
-        var baseDir = _root ?? baseDirectory ?? Directory.GetCurrentDirectory();
+        var baseDir = _root ?? (baseDirectory is not null ? Path.GetFullPath(baseDirectory) : null) ?? Directory.GetCurrentDirectory();
 
         if (_segments.Length == 0)
             yield break;
@@ -379,8 +379,23 @@ public sealed class Glob
         var ctx = new TraversalContext(respectGitignore, filter, gitRoot, followSymlinks);
         if (followSymlinks) ctx.SeedVisitedPaths(baseDir);
 
-        foreach (var path in MatchSegments(baseDir, 0, ctx))
-            yield return path;
+        // Deduplicate only when multiple ** segments can cause the same file to be reached
+        // via different traversal paths. Single-** patterns form a tree walk — no duplicates possible.
+        int doubleStarCount = 0;
+        foreach (var seg in _segments)
+            if (seg.Kind == GlobSegmentKind.DoubleStar) doubleStarCount++;
+
+        if (doubleStarCount >= 2)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in MatchSegments(baseDir, 0, ctx))
+                if (seen.Add(path)) yield return path;
+        }
+        else
+        {
+            foreach (var path in MatchSegments(baseDir, 0, ctx))
+                yield return path;
+        }
     }
 
     /// <summary>
@@ -407,7 +422,7 @@ public sealed class Glob
             return;
         }
 
-        var baseDir = (baseDirectory is not null ? Path.GetFullPath(baseDirectory) : null) ?? _root ?? Directory.GetCurrentDirectory();
+        var baseDir = _root ?? (baseDirectory is not null ? Path.GetFullPath(baseDirectory) : null) ?? Directory.GetCurrentDirectory();
         if (_segments.Length == 0) return;
 
         GitignoreFilter? filter = null;
@@ -423,6 +438,19 @@ public sealed class Glob
         bool followSymlinks = options?.FollowSymlinks == true;
         var ctx = new TraversalContext(respectGitignore, filter, gitRoot, followSymlinks);
         if (followSymlinks) ctx.SeedVisitedPaths(baseDir);
+
+        // Patterns with multiple ** segments can match the same file via different traversal paths
+        // (e.g. **/a/**/*.cs visits a file in nested `a` dirs twice). Deduplicate only then —
+        // single-** patterns form a tree walk and can never produce duplicates.
+        int doubleStarCount = 0;
+        foreach (var seg in _segments)
+            if (seg.Kind == GlobSegmentKind.DoubleStar) doubleStarCount++;
+
+        if (doubleStarCount >= 2)
+        {
+            var seen = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            writer = new DeduplicatingChannelWriter(writer, seen);
+        }
 
         WriteMatchesSegments(baseDir, 0, ctx, writer, cancellationToken);
     }
