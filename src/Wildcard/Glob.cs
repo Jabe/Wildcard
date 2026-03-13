@@ -471,8 +471,22 @@ public sealed class Glob
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public static void WriteBlocking(System.Threading.Channels.ChannelWriter<string> writer, string value)
     {
+        if (writer.TryWrite(value)) return;
+        WriteBlockingSlow(writer, value);
+    }
+
+    private static void WriteBlockingSlow(System.Threading.Channels.ChannelWriter<string> writer, string value)
+    {
+        var spinner = new SpinWait();
         while (!writer.TryWrite(value))
-            writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult();
+        {
+            if (spinner.NextSpinWillYield)
+            {
+                writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult();
+                return;
+            }
+            spinner.SpinOnce();
+        }
     }
 
     private void WriteMatchesSegments(string currentDir, int segmentIndex, TraversalContext ctx,

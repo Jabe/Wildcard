@@ -276,7 +276,7 @@ static async Task<int> RunAsync(CliArgs parsed)
     // Count mode: per-file match counts + summary
     if (parsed.Count)
     {
-        var countChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var countChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
@@ -334,7 +334,7 @@ static async Task<int> RunAsync(CliArgs parsed)
     // Files-only mode: just print file paths that contain matches
     if (parsed.FilesOnly)
     {
-        var filesOnlyChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var filesOnlyChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
@@ -379,7 +379,7 @@ static async Task<int> RunAsync(CliArgs parsed)
         : null;
 
     // Producer: parallel glob feeds file paths into a channel
-    var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+    var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
     {
         SingleWriter = false,
         SingleReader = false,

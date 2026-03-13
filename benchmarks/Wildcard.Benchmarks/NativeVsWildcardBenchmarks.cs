@@ -228,7 +228,7 @@ public static class NativeVsWildcardRunner
 
     private static async Task<int> RunParallelContentSearch(Glob glob, FilePathMatcher matcher)
     {
-        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false,
             SingleReader = false,

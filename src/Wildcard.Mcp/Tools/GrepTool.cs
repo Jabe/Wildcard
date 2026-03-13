@@ -69,7 +69,7 @@ public static class GrepTool
         var sb = new StringBuilder();
         int count = 0;
 
-        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
@@ -121,7 +121,7 @@ public static class GrepTool
         int matchCount = 0;
         bool anyOutput = false;
 
-        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
@@ -218,7 +218,7 @@ public static class GrepTool
         int matchCount = 0;
         bool anyOutput = false;
 
-        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
@@ -331,7 +331,7 @@ public static class GrepTool
         int totalMatches = 0;
         int totalFiles = 0;
 
-        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+        var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
         {
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
