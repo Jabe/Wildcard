@@ -28,6 +28,7 @@ public sealed class Glob
 {
     private readonly GlobSegment[] _segments;
     private readonly string? _root; // non-null for absolute patterns
+    private readonly Glob[]? _variants; // non-null for brace-expanded patterns
 
     private enum GlobSegmentKind : byte { Literal, Pattern, DoubleStar }
 
@@ -175,20 +176,34 @@ public sealed class Glob
         }
     }
 
-    private Glob(GlobSegment[] segments, string? root)
+    private Glob(GlobSegment[] segments, string? root, Glob[]? variants = null)
     {
         _segments = segments;
         _root = root;
+        _variants = variants;
     }
 
     /// <summary>
     /// Parses a glob pattern string into a <see cref="Glob"/>.
-    /// Supports <c>*</c>, <c>?</c>, <c>[abc]</c> within path segments, and <c>**</c> for recursive directory matching.
+    /// Supports <c>*</c>, <c>?</c>, <c>[abc]</c> within path segments, <c>**</c> for recursive directory matching,
+    /// and <c>{a,b,c}</c> brace expansion for matching multiple alternatives.
     /// </summary>
     public static Glob Parse(string pattern)
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
+        var expanded = BraceExpander.Expand(pattern);
+        if (expanded.Length == 1)
+            return ParseSingle(expanded[0]);
+
+        var variants = new Glob[expanded.Length];
+        for (int i = 0; i < expanded.Length; i++)
+            variants[i] = ParseSingle(expanded[i]);
+        return new Glob([], null, variants);
+    }
+
+    private static Glob ParseSingle(string pattern)
+    {
         // Detect absolute path root before normalizing
         string? root = null;
         if (Path.IsPathRooted(pattern))
@@ -230,6 +245,20 @@ public sealed class Glob
     /// </summary>
     public IEnumerable<string> EnumerateMatches(string? baseDirectory = null, GlobOptions? options = null)
     {
+        if (_variants is not null)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var variant in _variants)
+            {
+                foreach (var path in variant.EnumerateMatches(baseDirectory, options))
+                {
+                    if (seen.Add(path))
+                        yield return path;
+                }
+            }
+            yield break;
+        }
+
         var baseDir = _root ?? baseDirectory ?? Directory.GetCurrentDirectory();
 
         if (_segments.Length == 0)
@@ -269,6 +298,15 @@ public sealed class Glob
     public void WriteMatchesToChannel(System.Threading.Channels.ChannelWriter<string> writer,
         GlobOptions? options = null, CancellationToken cancellationToken = default)
     {
+        if (_variants is not null)
+        {
+            var seen = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var deduplicatingWriter = new DeduplicatingChannelWriter(writer, seen);
+            foreach (var variant in _variants)
+                variant.WriteMatchesToChannel(deduplicatingWriter, options, cancellationToken);
+            return;
+        }
+
         var baseDir = _root ?? Directory.GetCurrentDirectory();
         if (_segments.Length == 0) return;
 
@@ -449,6 +487,17 @@ public sealed class Glob
     public bool IsMatch(string relativePath)
     {
         ArgumentNullException.ThrowIfNull(relativePath);
+
+        if (_variants is not null)
+        {
+            foreach (var variant in _variants)
+            {
+                if (variant.IsMatch(relativePath))
+                    return true;
+            }
+            return false;
+        }
+
         var parts = relativePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         return IsMatchSegments(parts, 0, 0);
     }
@@ -702,7 +751,7 @@ public sealed class Glob
     {
         foreach (char c in segment)
         {
-            if (c is '*' or '?' or '[')
+            if (c is '*' or '?' or '[' or '{')
                 return true;
         }
         return false;
@@ -751,5 +800,25 @@ public sealed class Glob
                 .Select(static d => new DirEntry(d, false));
         }
         catch (DirectoryNotFoundException) { return []; }
+    }
+
+    /// <summary>
+    /// A channel writer wrapper that deduplicates values using a concurrent dictionary.
+    /// Used when multiple brace-expanded variants write to the same channel.
+    /// </summary>
+    private sealed class DeduplicatingChannelWriter(
+        System.Threading.Channels.ChannelWriter<string> inner,
+        System.Collections.Concurrent.ConcurrentDictionary<string, byte> seen)
+        : System.Threading.Channels.ChannelWriter<string>
+    {
+        public override bool TryWrite(string item)
+        {
+            if (!seen.TryAdd(item, 0))
+                return true; // already written by another variant — skip
+            return inner.TryWrite(item);
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) =>
+            inner.WaitToWriteAsync(cancellationToken);
     }
 }

@@ -359,6 +359,72 @@ public class GlobTests : IDisposable
         Assert.False(Wildcard.Glob.IsMatch("**/**/*.cs", "readme.md"));
     }
 
+    // --- Brace expansion ---
+
+    [Fact]
+    public void BraceExpansion_MultipleExtensions()
+    {
+        var results = Glob("**/*.{cs,json}");
+        Assert.Contains("src/Program.cs", results);
+        Assert.Contains("src/Lib.cs", results);
+        Assert.Contains("src/utils/Helper.cs", results);
+        Assert.Contains("src/utils/data.json", results);
+        Assert.Contains("src/deep/nested/File.cs", results);
+        Assert.DoesNotContain("docs/readme.md", results);
+        Assert.DoesNotContain("root.txt", results);
+    }
+
+    [Fact]
+    public void BraceExpansion_MultipleDirectories()
+    {
+        var results = Glob("{src,docs}/*");
+        Assert.Contains("src/Program.cs", results);
+        Assert.Contains("src/Lib.cs", results);
+        Assert.Contains("docs/readme.md", results);
+    }
+
+    [Fact]
+    public void BraceExpansion_CrossSegment()
+    {
+        var results = Glob("{src/utils,docs}/*");
+        Assert.Contains("src/utils/Helper.cs", results);
+        Assert.Contains("src/utils/data.json", results);
+        Assert.Contains("docs/readme.md", results);
+    }
+
+    [Fact]
+    public void BraceExpansion_SingleAlternative_SameAsBare()
+    {
+        var withBraces = Glob("*.{txt}");
+        var withoutBraces = Glob("*.txt");
+        Assert.Equal(withoutBraces, withBraces);
+    }
+
+    [Fact]
+    public void BraceExpansion_NoDuplicates()
+    {
+        var results = Glob("{src,src}/*.cs");
+        // Each file should appear only once
+        Assert.Equal(results.Distinct(StringComparer.OrdinalIgnoreCase).Count(), results.Count);
+    }
+
+    [Theory]
+    [InlineData("**/*.{cs,md}", "src/Program.cs", true)]
+    [InlineData("**/*.{cs,md}", "docs/readme.md", true)]
+    [InlineData("**/*.{cs,md}", "root.txt", false)]
+    [InlineData("**/*.{cs,md}", "src/utils/data.json", false)]
+    [InlineData("{src,docs}/**/*", "src/Program.cs", true)]
+    [InlineData("{src,docs}/**/*", "docs/readme.md", true)]
+    [InlineData("{src,docs}/**/*", "root.txt", false)]
+    [InlineData("*.{cs,md,json}", "file.cs", true)]
+    [InlineData("*.{cs,md,json}", "file.md", true)]
+    [InlineData("*.{cs,md,json}", "file.json", true)]
+    [InlineData("*.{cs,md,json}", "file.txt", false)]
+    public void IsMatch_BraceExpansion(string pattern, string path, bool expected)
+    {
+        Assert.Equal(expected, Wildcard.Glob.IsMatch(pattern, path));
+    }
+
     // --- Symlink handling ---
 
     [Fact]

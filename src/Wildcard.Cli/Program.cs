@@ -3,7 +3,7 @@ using System.Text;
 using System.Threading.Channels;
 using Wildcard;
 
-var globArg = new Argument<string>("glob") { Description = "File glob pattern (e.g. \"src/**/*.cs\")" };
+var globArg = new Argument<string>("glob") { Description = "File glob pattern (e.g. \"src/**/*.cs\", \"**/*.{cs,razor,css}\")" };
 var patternArg = new Argument<string[]>("pattern") { Description = "Content search pattern(s) — multiple patterns are OR'd (e.g. ERROR WARN). Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\").", Arity = ArgumentArity.ZeroOrMore };
 
 var excludeOption = new Option<string[]>("-x", "--exclude") { Description = "Exclude lines matching pattern (repeatable)", AllowMultipleArgumentsPerToken = true };

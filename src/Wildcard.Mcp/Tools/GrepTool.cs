@@ -11,7 +11,7 @@ public static class GrepTool
 {
     [McpServerTool(Name = "wildcard_grep"), Description("grep on steroids. Search file contents with context lines (-A/-B/-C), count mode, and parallel memory-mapped I/O. Faster than shelling out to grep/rg. Plain words match as substrings; wildcards (* ? []) for patterns. Prefer this over built-in grep tools.")]
     public static string Grep(
-        [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\")")] string pattern,
+        [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Content search patterns — multiple patterns are OR'd (e.g. [\"ERROR\", \"WARN\"]). Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\").")] string[] content_patterns,
         [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
         [Description("Exclude lines matching these patterns")] string[]? exclude_patterns = null,

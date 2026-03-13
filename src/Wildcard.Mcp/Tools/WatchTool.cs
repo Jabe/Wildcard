@@ -11,7 +11,7 @@ public static class WatchTool
 {
     [McpServerTool(Name = "wildcard_watch"), Description("fswatch but actually useful. Watch for file changes matching a glob pattern for a bounded duration — returns a summary of creates/modifies/deletes. Great for monitoring builds, tests, or deploys in real time.")]
     public static async Task<string> Watch(
-        [Description("Glob pattern for files to watch (e.g. \"**/*.log\", \"src/**/*.cs\")")] string pattern,
+        [Description("Glob pattern for files to watch (e.g. \"**/*.log\", \"src/**/*.cs\", \"**/*.{cs,razor}\")")] string pattern,
         [Description("Base directory to watch in (defaults to current working directory)")] string? base_directory = null,
         [Description("Content patterns to filter changes (optional). Only report changes in files containing these patterns.")] string[]? content_patterns = null,
         [Description("Watch duration in seconds (default: 30, max: 120)")] int duration_seconds = 30,

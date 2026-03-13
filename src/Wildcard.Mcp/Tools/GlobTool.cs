@@ -8,9 +8,9 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class GlobTool
 {
-    [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files by glob pattern — blazing fast, respects .gitignore, supports count mode. Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes.")]
+    [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files by glob pattern — blazing fast, respects .gitignore, supports count mode. Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes, {a,b,c} brace expansion.")]
     public static string Glob(
-        [Description("Glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"*.json\")")] string pattern,
+        [Description("Glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
         [Description("Glob patterns to exclude file paths (e.g. \"**/node_modules/**\")")] string[]? exclude_paths = null,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,

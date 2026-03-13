@@ -11,7 +11,7 @@ public static class ReplaceTool
 {
     [McpServerTool(Name = "wildcard_replace"), Description("sed wishes it could. Find-and-replace across files with glob patterns — dry-run preview by default, atomic writes, capture groups ($1/$2). Way safer than regex-in-bash. Set dry_run=false to actually write.")]
     public static string Replace(
-        [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\")")] string pattern,
+        [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Text to find — plain string for literal match, or wildcard pattern with * ? [] for capture-group replacement")] string find,
         [Description("Replacement text (use $1, $2 for capture groups when find contains wildcards)")] string replace,
         [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,

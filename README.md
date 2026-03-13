@@ -17,6 +17,13 @@ A high-performance .NET 10 library for wildcard pattern matching. Provides a lig
 | `[!x]` or `[^x]` | Matches any character NOT in the set |
 | `\` | Escapes the next character (e.g. `\*` matches a literal `*`) |
 
+### Glob-only Syntax
+
+| Token | Description |
+|-------|-------------|
+| `**` | Matches zero or more directory levels (recursive) |
+| `{a,b,c}` | Brace expansion — matches any of the comma-separated alternatives |
+
 ## Usage
 
 ```csharp
@@ -100,11 +107,14 @@ foreach (var line in results)
 
 ### File System Globbing
 
-`Glob` matches file paths on disk with support for `*`, `?`, `[abc]`, and `**` (recursive directory matching).
+`Glob` matches file paths on disk with support for `*`, `?`, `[abc]`, `**` (recursive directory matching), and `{a,b,c}` (brace expansion).
 
 ```csharp
 // Find all .cs files recursively
 var files = Glob.Match("src/**/*.cs").ToList();
+
+// Brace expansion — match multiple extensions in one pattern
+var webFiles = Glob.Match("**/*.{razor,cs,css}").ToList();
 
 // Single directory level
 var logs = Glob.Match("/var/log/*.log").ToList();

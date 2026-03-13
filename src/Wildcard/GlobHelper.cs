@@ -26,7 +26,7 @@ public static class GlobHelper
         bool seenWildcard = false;
         foreach (var part in parts)
         {
-            if (!seenWildcard && part.IndexOfAny(['*', '?', '[']) >= 0)
+            if (!seenWildcard && part.IndexOfAny(['*', '?', '[', '{']) >= 0)
                 seenWildcard = true;
             if (seenWildcard) remaining++;
         }
@@ -45,7 +45,7 @@ public static class GlobHelper
         var baseParts = new List<string>();
         foreach (var part in parts)
         {
-            if (part.IndexOfAny(['*', '?', '[']) >= 0) break;
+            if (part.IndexOfAny(['*', '?', '[', '{']) >= 0) break;
             baseParts.Add(part);
         }
         if (baseParts.Count == 0) return cwd;
