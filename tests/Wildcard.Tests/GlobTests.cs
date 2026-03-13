@@ -550,4 +550,128 @@ public class GlobTests : IDisposable
         Assert.Contains("real.txt", results);
         Assert.Contains("link.txt", results);
     }
+
+    // --- Merged single-traversal brace expansion ---
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_MatchesEquivalentUnion()
+    {
+        // **/*.{cs,json} should produce same results as union of **/*.cs and **/*.json
+        var braceResults = Wildcard.Glob.Match("**/*.{cs,json}", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var unionResults = Wildcard.Glob.Match("**/*.cs", _tempDir)
+            .Concat(Wildcard.Glob.Match("**/*.json", _tempDir))
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.Equal(unionResults, braceResults);
+    }
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_ThreeExtensions()
+    {
+        CreateFile("src/style.css");
+        CreateFile("src/page.razor");
+
+        var results = Wildcard.Glob.Match("**/*.{cs,css,razor}", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.Contains("src/Program.cs", results);
+        Assert.Contains("src/style.css", results);
+        Assert.Contains("src/page.razor", results);
+        Assert.DoesNotContain("src/utils/data.json", results);
+    }
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_NoDuplicates()
+    {
+        // *.{cs,cs} — both alternatives match the same files, should deduplicate
+        var results = Wildcard.Glob.Match("**/*.{cs,cs}", _tempDir).ToList();
+        var distinct = results.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        Assert.Equal(distinct.Count, results.Count);
+    }
+
+    [Fact]
+    public void BraceExpansion_NonMergeable_DifferentPrefixes_StillCorrect()
+    {
+        // Braces in directory segment can't merge — falls back to variants
+        var results = Wildcard.Glob.Match("{src,docs}/*", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.Contains("src/Program.cs", results);
+        Assert.Contains("src/Lib.cs", results);
+        Assert.Contains("docs/readme.md", results);
+    }
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_IsMatchConsistent()
+    {
+        // Verify IsMatch agrees with Match for the merged pattern
+        var pattern = "**/*.{cs,json,md}";
+        var matched = Wildcard.Glob.Match(pattern, _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        foreach (var path in matched)
+            Assert.True(Wildcard.Glob.IsMatch(pattern, path), $"IsMatch should match '{path}'");
+
+        // Non-matching extension
+        Assert.False(Wildcard.Glob.IsMatch(pattern, "file.xyz"));
+    }
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_SingleExtension_NoVariants()
+    {
+        // Single brace alternative — no expansion needed, should behave as plain glob
+        var braceResults = Wildcard.Glob.Match("**/*.{cs}", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var plainResults = Wildcard.Glob.Match("**/*.cs", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.Equal(plainResults, braceResults);
+    }
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_WithLiteralPrefix()
+    {
+        // src/*.{cs,json} — literal prefix + merged pattern segment
+        var results = Wildcard.Glob.Match("src/*.{cs,json}", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.Contains("src/Lib.cs", results);
+        Assert.Contains("src/Program.cs", results);
+        Assert.DoesNotContain("src/utils/Helper.cs", results); // not direct child
+        Assert.DoesNotContain("docs/readme.md", results);
+    }
+
+    [Fact]
+    public void BraceExpansion_MergedTraversal_ParallelMatchesSequential()
+    {
+        // Verify parallel enumeration (Match) matches sequential (EnumerateMatches)
+        var pattern = "**/*.{cs,md,json}";
+        var sequential = Wildcard.Glob.Parse(pattern).EnumerateMatches(_tempDir)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var parallel = Wildcard.Glob.Match(pattern, _tempDir)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.Equal(sequential, parallel);
+    }
 }

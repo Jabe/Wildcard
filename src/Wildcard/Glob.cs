@@ -36,17 +36,40 @@ public sealed class Glob
     {
         public readonly GlobSegmentKind Kind;
         public readonly string? LiteralName;
-        public readonly WildcardPattern? Pattern;
+        public readonly WildcardPattern[]? Patterns;
 
-        private GlobSegment(GlobSegmentKind kind, string? literal, WildcardPattern? pattern)
+        private GlobSegment(GlobSegmentKind kind, string? literal, WildcardPattern[]? patterns)
         {
             Kind = kind;
             LiteralName = literal;
-            Pattern = pattern;
+            Patterns = patterns;
+        }
+
+        public bool IsPatternMatch(ReadOnlySpan<char> input)
+        {
+            var patterns = Patterns!;
+            for (int i = 0; i < patterns.Length; i++)
+            {
+                if (patterns[i].IsMatch(input))
+                    return true;
+            }
+            return false;
+        }
+
+        public bool IsPatternMatch(string input)
+        {
+            var patterns = Patterns!;
+            for (int i = 0; i < patterns.Length; i++)
+            {
+                if (patterns[i].IsMatch(input))
+                    return true;
+            }
+            return false;
         }
 
         public static GlobSegment MakeLiteral(string name) => new(GlobSegmentKind.Literal, name, null);
-        public static GlobSegment MakePattern(WildcardPattern pattern) => new(GlobSegmentKind.Pattern, null, pattern);
+        public static GlobSegment MakePattern(WildcardPattern pattern) => new(GlobSegmentKind.Pattern, null, [pattern]);
+        public static GlobSegment MakePattern(WildcardPattern[] patterns) => new(GlobSegmentKind.Pattern, null, patterns);
         public static GlobSegment MakeDoubleStar() => new(GlobSegmentKind.DoubleStar, null, null);
     }
 
@@ -199,7 +222,84 @@ public sealed class Glob
         var variants = new Glob[expanded.Length];
         for (int i = 0; i < expanded.Length; i++)
             variants[i] = ParseSingle(expanded[i]);
+
+        // Optimization: if all variants share the same segment structure (same count,
+        // same Kind/Literal for all but the last, and the last is Pattern in all),
+        // merge into a single Glob with a multi-pattern final segment.
+        // This avoids multiple filesystem traversals for patterns like **/*.{cs,razor,css}.
+        var merged = TryMergeVariants(variants);
+        if (merged is not null)
+            return merged;
+
         return new Glob([], null, variants);
+    }
+
+    /// <summary>
+    /// Attempts to merge variants that share the same segment structure into a single Glob
+    /// with a multi-pattern final segment. Returns null if variants cannot be merged.
+    /// </summary>
+    private static Glob? TryMergeVariants(Glob[] variants)
+    {
+        if (variants.Length < 2)
+            return null;
+
+        var first = variants[0];
+        int segCount = first._segments.Length;
+        if (segCount == 0)
+            return null;
+
+        // All variants must have the same root and segment count
+        for (int i = 1; i < variants.Length; i++)
+        {
+            if (variants[i]._segments.Length != segCount)
+                return null;
+            if (variants[i]._root != first._root)
+                return null;
+        }
+
+        // Last segment must be Pattern in all variants
+        if (first._segments[segCount - 1].Kind != GlobSegmentKind.Pattern)
+            return null;
+        for (int i = 1; i < variants.Length; i++)
+        {
+            if (variants[i]._segments[segCount - 1].Kind != GlobSegmentKind.Pattern)
+                return null;
+        }
+
+        // All preceding segments must be identical across variants
+        for (int s = 0; s < segCount - 1; s++)
+        {
+            var refSeg = first._segments[s];
+            for (int v = 1; v < variants.Length; v++)
+            {
+                var otherSeg = variants[v]._segments[s];
+                if (refSeg.Kind != otherSeg.Kind)
+                    return null;
+                if (refSeg.Kind == GlobSegmentKind.Literal && !string.Equals(refSeg.LiteralName, otherSeg.LiteralName, StringComparison.OrdinalIgnoreCase))
+                    return null;
+                if (refSeg.Kind == GlobSegmentKind.Pattern)
+                {
+                    // Pattern segments must have same patterns — just bail if prefix has patterns
+                    // (this optimization targets the common case: braces only in filename)
+                    return null;
+                }
+            }
+        }
+
+        // Merge: collect all patterns from the last segment of each variant
+        var allPatterns = new List<WildcardPattern>();
+        for (int i = 0; i < variants.Length; i++)
+        {
+            var patterns = variants[i]._segments[segCount - 1].Patterns!;
+            for (int j = 0; j < patterns.Length; j++)
+                allPatterns.Add(patterns[j]);
+        }
+
+        var mergedSegments = new GlobSegment[segCount];
+        Array.Copy(first._segments, mergedSegments, segCount - 1);
+        mergedSegments[segCount - 1] = GlobSegment.MakePattern(allPatterns.ToArray());
+
+        return new Glob(mergedSegments, first._root);
     }
 
     private static Glob ParseSingle(string pattern)
@@ -408,7 +508,7 @@ public sealed class Glob
                 {
                     foreach (var file in EnumerateFilesSafe(currentDir, ctx.FollowSymlinks))
                     {
-                        if (seg.Pattern!.IsMatch(Path.GetFileName(file.AsSpan())))
+                        if (seg.IsPatternMatch(Path.GetFileName(file.AsSpan())))
                         {
                             if (!ctx.IsIgnored(file, false))
                                 WriteBlocking(writer,file);
@@ -419,7 +519,7 @@ public sealed class Glob
                 {
                     foreach (var entry in EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks))
                     {
-                        if (seg.Pattern!.IsMatch(Path.GetFileName(entry.FullPath.AsSpan())) && !ctx.IsIgnored(entry.FullPath, true))
+                        if (seg.IsPatternMatch(Path.GetFileName(entry.FullPath.AsSpan())) && !ctx.IsIgnored(entry.FullPath, true))
                         {
                             if (entry.IsSymlink && !ctx.TryEnterSymlinkedDirectory(entry.FullPath)) continue;
                             try
@@ -528,7 +628,7 @@ public sealed class Glob
 
             case GlobSegmentKind.Pattern:
                 if (partIndex >= parts.Length) return false;
-                if (!seg.Pattern!.IsMatch(parts[partIndex]))
+                if (!seg.IsPatternMatch(parts[partIndex]))
                     return false;
                 return IsMatchSegments(parts, segmentIndex + 1, partIndex + 1);
 
@@ -615,7 +715,7 @@ public sealed class Glob
                 {
                     foreach (var file in EnumerateFilesSafe(currentDir, ctx.FollowSymlinks))
                     {
-                        if (seg.Pattern!.IsMatch(Path.GetFileName(file.AsSpan())))
+                        if (seg.IsPatternMatch(Path.GetFileName(file.AsSpan())))
                         {
                             if (!ctx.IsIgnored(file, false))
                                 yield return file;
@@ -626,7 +726,7 @@ public sealed class Glob
                 {
                     foreach (var entry in EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks))
                     {
-                        if (seg.Pattern!.IsMatch(Path.GetFileName(entry.FullPath.AsSpan())))
+                        if (seg.IsPatternMatch(Path.GetFileName(entry.FullPath.AsSpan())))
                         {
                             if (!ctx.IsIgnored(entry.FullPath, true))
                             {
