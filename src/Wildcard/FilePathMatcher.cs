@@ -194,9 +194,7 @@ public sealed class FilePathMatcher
 
         if (fileLength <= BufferedReadThreshold)
         {
-            var results = new List<LineMatch>();
-            ScanFileBuffered(filePath, (int)fileLength, results);
-            return results.Count > 0;
+            return ContainsMatchBuffered(filePath, (int)fileLength);
         }
 
         if (fileLength > int.MaxValue)
@@ -207,6 +205,29 @@ public sealed class FilePathMatcher
         }
 
         return ContainsMatchMemoryMapped(filePath, fileLength);
+    }
+
+    private bool ContainsMatchBuffered(string filePath, int fileLength)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(fileLength);
+        try
+        {
+            int bytesRead;
+            using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: fileLength, FileOptions.SequentialScan))
+                bytesRead = fs.Read(buffer, 0, fileLength);
+
+            var data = buffer.AsSpan(0, bytesRead);
+
+            int bomOffset = 0;
+            if (data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
+                bomOffset = 3;
+
+            return ContainsMatchInData(data[bomOffset..]);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private unsafe bool ContainsMatchMemoryMapped(string filePath, long fileLength)
@@ -225,47 +246,50 @@ public sealed class FilePathMatcher
             if (fileSpan.Length >= 3 && fileSpan[0] == 0xEF && fileSpan[1] == 0xBB && fileSpan[2] == 0xBF)
                 bomOffset = 3;
 
-            var data = fileSpan[bomOffset..];
-
-            // Line-by-line scan, stop at first match
-            var charBuffer = ArrayPool<char>.Shared.Rent(65536);
-            try
-            {
-                int lineNumber = 0;
-                int pos = 0;
-                var singleResult = new List<LineMatch>();
-
-                while (pos < data.Length)
-                {
-                    int nlIdx = data[pos..].IndexOf((byte)'\n');
-                    if (nlIdx < 0)
-                    {
-                        var lastLine = data[pos..];
-                        if (lastLine.Length > 0)
-                        {
-                            lineNumber++;
-                            ProcessLine(filePath, lastLine, lineNumber, charBuffer, singleResult);
-                            if (singleResult.Count > 0) return true;
-                        }
-                        break;
-                    }
-
-                    lineNumber++;
-                    var lineBytes = data.Slice(pos, nlIdx);
-                    ProcessLine(filePath, lineBytes, lineNumber, charBuffer, singleResult);
-                    if (singleResult.Count > 0) return true;
-                    pos += nlIdx + 1;
-                }
-                return false;
-            }
-            finally
-            {
-                ArrayPool<char>.Shared.Return(charBuffer);
-            }
+            return ContainsMatchInData(fileSpan[bomOffset..]);
         }
         finally
         {
             accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
+    }
+
+    private bool ContainsMatchInData(ReadOnlySpan<byte> data)
+    {
+        var charBuffer = ArrayPool<char>.Shared.Rent(65536);
+        try
+        {
+            int pos = 0;
+            var singleResult = new List<LineMatch>();
+
+            while (pos < data.Length)
+            {
+                int nlIdx = data[pos..].IndexOf((byte)'\n');
+                ReadOnlySpan<byte> lineBytes;
+                bool isLastLine = false;
+
+                if (nlIdx < 0)
+                {
+                    lineBytes = data[pos..];
+                    if (lineBytes.Length == 0) break;
+                    isLastLine = true;
+                }
+                else
+                {
+                    lineBytes = data.Slice(pos, nlIdx);
+                }
+
+                ProcessLine(string.Empty, lineBytes, 0, charBuffer, singleResult);
+                if (singleResult.Count > 0) return true;
+
+                if (isLastLine) break;
+                pos += nlIdx + 1;
+            }
+            return false;
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(charBuffer);
         }
     }
 
