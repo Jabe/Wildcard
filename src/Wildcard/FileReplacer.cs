@@ -125,35 +125,51 @@ public static class FileReplacer
 
     private static FileResult ApplyToFile(string filePath, string find, string replace, bool ignoreCase)
     {
-        var result = ComputeReplacements(filePath, find, replace, ignoreCase);
-        if (result.Replacements.Count == 0)
-            return result;
+        var empty = new FileResult(filePath, []);
 
-        // Re-read and apply
+        if (!CanProcessFile(filePath))
+            return empty;
+
         var (lines, encoding, lineEnding) = ReadFile(filePath);
         if (lines is null)
-            return new FileResult(filePath, []);
+            return empty;
 
+        // Single pass: compute replacements and apply to the same lines array
         bool isLiteral = IsLiteralPattern(find);
+        var replacements = new List<LineReplacement>();
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         WildcardPattern? pattern = isLiteral ? null : WildcardPattern.Compile(find, ignoreCase);
 
         for (int i = 0; i < lines.Length; i++)
         {
+            string newLine;
             if (isLiteral)
             {
-                lines[i] = lines[i].Replace(find, replace, comparison);
+                newLine = lines[i].Replace(find, replace, comparison);
             }
             else if (pattern!.TryMatch(lines[i], out var captures))
             {
-                lines[i] = BuildCaptureReplacement(replace, captures);
+                newLine = BuildCaptureReplacement(replace, captures);
+            }
+            else
+            {
+                continue;
+            }
+
+            if (newLine != lines[i])
+            {
+                replacements.Add(new LineReplacement(i + 1, lines[i], newLine));
+                lines[i] = newLine;
             }
         }
+
+        if (replacements.Count == 0)
+            return empty;
 
         var newContent = string.Join(lineEnding, lines);
         WriteFileAtomic(filePath, newContent, encoding);
 
-        return result;
+        return new FileResult(filePath, replacements);
     }
 
     private static bool CanProcessFile(string filePath)
