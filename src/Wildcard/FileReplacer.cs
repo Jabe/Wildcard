@@ -181,7 +181,11 @@ public static class FileReplacer
                     return false;
             }
         }
-        catch
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
         {
             return false;
         }
@@ -209,7 +213,11 @@ public static class FileReplacer
 
             return (lines, encoding, lineEnding);
         }
-        catch
+        catch (IOException)
+        {
+            return (null, Encoding.UTF8, "\n");
+        }
+        catch (UnauthorizedAccessException)
         {
             return (null, Encoding.UTF8, "\n");
         }
@@ -225,7 +233,7 @@ public static class FileReplacer
         }
         catch
         {
-            try { File.Delete(tempPath); } catch { }
+            try { File.Delete(tempPath); } catch (IOException) { }
             throw;
         }
     }

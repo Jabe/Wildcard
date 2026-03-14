@@ -118,7 +118,7 @@ public sealed class Glob
                 var target = Directory.ResolveLinkTarget(directory, returnFinalTarget: true);
                 realPath = target?.FullName ?? Path.GetFullPath(directory);
             }
-            catch
+            catch (IOException)
             {
                 realPath = Path.GetFullPath(directory);
             }
@@ -135,7 +135,7 @@ public sealed class Glob
                 var target = Directory.ResolveLinkTarget(directory, returnFinalTarget: true);
                 _visitedRealPaths.Remove(target?.FullName ?? Path.GetFullPath(directory));
             }
-            catch
+            catch (IOException)
             {
                 _visitedRealPaths.Remove(Path.GetFullPath(directory));
             }
