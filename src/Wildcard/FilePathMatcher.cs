@@ -322,14 +322,13 @@ public sealed class FilePathMatcher
         {
             try
             {
-                await Parallel.ForEachAsync(filePaths, cancellationToken, (filePath, ct) =>
+                await Parallel.ForEachAsync(filePaths, cancellationToken, async (filePath, ct) =>
                 {
                     ct.ThrowIfCancellationRequested();
                     var local = new List<LineMatch>();
                     ScanFile(filePath, local);
                     foreach (var match in local)
-                        channel.Writer.TryWrite(match);
-                    return ValueTask.CompletedTask;
+                        await channel.Writer.WriteAsync(match, ct);
                 });
             }
             finally
