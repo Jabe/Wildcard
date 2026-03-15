@@ -590,11 +590,14 @@ public sealed class Glob
                 // fixed worker pool processes each dir and re-enqueues discovered subdirs.
                 // This distributes work across all cores even for deep/unbalanced trees,
                 // unlike the previous approach which forked once and went sequential per subtree.
-                var subDirs = EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks)
-                    .Where(e => !ctx.IsIgnored(e.FullPath, true))
-                    .ToArray();
+                var subDirs = new List<DirEntry>();
+                foreach (var e in EnumerateDirectoriesSafe(currentDir, ctx.FollowSymlinks))
+                {
+                    if (!ctx.IsIgnored(e.FullPath, true))
+                        subDirs.Add(e);
+                }
 
-                if (subDirs.Length == 0) break;
+                if (subDirs.Count == 0) break;
 
                 var workQueue = new ConcurrentQueue<(string Dir, TraversalContext Ctx)>();
                 int outstandingWork = 0;
