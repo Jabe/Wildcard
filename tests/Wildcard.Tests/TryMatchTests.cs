@@ -115,4 +115,46 @@ public class TryMatchTests
         Assert.True(p.TryMatch("[2024-03-15] ERROR - timeout", out var captures));
         Assert.Equal(["2024-03-15", "ERROR", "timeout"], captures);
     }
+
+    // ── Brace alternation ──
+
+    [Fact]
+    public void Brace_CapturesFromMatchingAlternative()
+    {
+        var p = WildcardPattern.Compile("{error,warn}: *");
+        Assert.True(p.TryMatch("error: timeout", out var captures));
+        Assert.Equal(["timeout"], captures);
+    }
+
+    [Fact]
+    public void Brace_SecondAlternativeMatches()
+    {
+        var p = WildcardPattern.Compile("{error,warn}: *");
+        Assert.True(p.TryMatch("warn: low memory", out var captures));
+        Assert.Equal(["low memory"], captures);
+    }
+
+    [Fact]
+    public void Brace_NoMatch_ReturnsFalse()
+    {
+        var p = WildcardPattern.Compile("{error,warn}: *");
+        Assert.False(p.TryMatch("info: ok", out var captures));
+        Assert.Empty(captures);
+    }
+
+    [Fact]
+    public void Brace_SuffixAlternation_Captures()
+    {
+        var p = WildcardPattern.Compile("*.{cs,fs}");
+        Assert.True(p.TryMatch("file.cs", out var captures));
+        Assert.Equal(["file"], captures);
+    }
+
+    [Fact]
+    public void Brace_NoBracesNoCaptures()
+    {
+        var p = WildcardPattern.Compile("{hello,world}");
+        Assert.True(p.TryMatch("hello", out var captures));
+        Assert.Empty(captures);
+    }
 }

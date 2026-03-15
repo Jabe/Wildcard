@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 namespace Wildcard;
 
 /// <summary>
-/// A compiled wildcard pattern that matches strings using *, ?, and character classes [abc], [a-z], [!x].
+/// A compiled wildcard pattern that matches strings using *, ?, character classes [abc], [a-z], [!x], and brace alternation {a,b,c}.
 /// Designed to avoid the full Regex engine overhead.
 /// </summary>
 public sealed class WildcardPattern
@@ -16,6 +16,7 @@ public sealed class WildcardPattern
     private readonly PatternShape _shape;
     private readonly string? _prefix;
     private readonly string? _suffix;
+    private readonly WildcardPattern[]? _alternatives;
 
     internal enum PatternShape : byte
     {
@@ -44,6 +45,16 @@ public sealed class WildcardPattern
         _ignoreCase = ignoreCase;
         _shape = DetectShape(segments, out _prefix, out _suffix);
         MinLength = ComputeMinLength(segments);
+    }
+
+    private WildcardPattern(string pattern, WildcardPattern[] alternatives, bool ignoreCase)
+    {
+        _original = pattern;
+        _segments = [];
+        _ignoreCase = ignoreCase;
+        _shape = PatternShape.General;
+        _alternatives = alternatives;
+        MinLength = alternatives.Min(a => a.MinLength);
     }
 
     private static int ComputeMinLength(Segment[] segments)
@@ -99,13 +110,26 @@ public sealed class WildcardPattern
 
     /// <summary>
     /// Compiles a wildcard pattern string into a <see cref="WildcardPattern"/>.
-    /// Supported syntax: * (any sequence), ? (any single char), [abc] (char class), [a-z] (range), [!x] (negation).
+    /// Supported syntax: * (any sequence), ? (any single char), [abc] (char class), [a-z] (range), [!x] (negation), {a,b,c} (alternation).
     /// </summary>
     public static WildcardPattern Compile(string pattern, bool ignoreCase = false)
     {
         ArgumentNullException.ThrowIfNull(pattern);
-        var segments = PatternCompiler.Compile(pattern, ignoreCase);
-        return new WildcardPattern(pattern, segments, ignoreCase);
+
+        var expanded = BraceExpander.Expand(pattern);
+        if (expanded.Length == 1)
+        {
+            var segments = PatternCompiler.Compile(expanded[0], ignoreCase);
+            return new WildcardPattern(pattern, segments, ignoreCase);
+        }
+
+        var alternatives = new WildcardPattern[expanded.Length];
+        for (int i = 0; i < expanded.Length; i++)
+        {
+            var segments = PatternCompiler.Compile(expanded[i], ignoreCase);
+            alternatives[i] = new WildcardPattern(expanded[i], segments, ignoreCase);
+        }
+        return new WildcardPattern(pattern, alternatives, ignoreCase);
     }
 
     /// <summary>
@@ -113,6 +137,13 @@ public sealed class WildcardPattern
     /// </summary>
     public bool IsMatch(ReadOnlySpan<char> input)
     {
+        if (_alternatives is not null)
+        {
+            foreach (var alt in _alternatives)
+                if (alt.IsMatch(input)) return true;
+            return false;
+        }
+
         switch (_shape)
         {
             case PatternShape.PureLiteral:
@@ -191,6 +222,14 @@ public sealed class WildcardPattern
     /// </summary>
     public bool TryMatch(ReadOnlySpan<char> input, out string[] captures)
     {
+        if (_alternatives is not null)
+        {
+            foreach (var alt in _alternatives)
+                if (alt.TryMatch(input, out captures)) return true;
+            captures = [];
+            return false;
+        }
+
         switch (_shape)
         {
             case PatternShape.PureLiteral:
@@ -277,6 +316,21 @@ public sealed class WildcardPattern
     /// </summary>
     public Regex ToRegex()
     {
+        if (_alternatives is not null)
+        {
+            var altSb = new StringBuilder("^(");
+            for (int a = 0; a < _alternatives.Length; a++)
+            {
+                if (a > 0) altSb.Append('|');
+                var altRegex = _alternatives[a].ToRegex().ToString();
+                // Strip ^...$ anchors from each alternative
+                altSb.Append(altRegex.AsSpan(1, altRegex.Length - 2));
+            }
+            altSb.Append(")$");
+            var options = _ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
+            return new Regex(altSb.ToString(), options);
+        }
+
         var sb = new StringBuilder("^");
         int i = 0;
 

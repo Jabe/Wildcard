@@ -99,4 +99,44 @@ public class ToRegexTests
         var regex = WildcardPattern.Compile(pattern).ToRegex();
         Assert.Equal(expectedRegex, regex.ToString());
     }
+
+    // ── Brace alternation ──
+
+    [Fact]
+    public void Brace_SimpleAlternation()
+    {
+        var regex = WildcardPattern.Compile("{a,b}").ToRegex();
+        Assert.Equal("^(a|b)$", regex.ToString());
+    }
+
+    [Fact]
+    public void Brace_SuffixAlternation()
+    {
+        var regex = WildcardPattern.Compile("*.{cs,fs}").ToRegex();
+        Assert.Equal(@"^(.*\.cs|.*\.fs)$", regex.ToString());
+    }
+
+    [Fact]
+    public void Brace_ThreeAlternatives()
+    {
+        var regex = WildcardPattern.Compile("{a,b,c}").ToRegex();
+        Assert.Equal("^(a|b|c)$", regex.ToString());
+    }
+
+    [Fact]
+    public void Brace_CaseInsensitive_SetsOption()
+    {
+        var regex = WildcardPattern.Compile("{hello,world}", ignoreCase: true).ToRegex();
+        Assert.True((regex.Options & RegexOptions.IgnoreCase) != 0);
+        Assert.Equal("^(hello|world)$", regex.ToString());
+    }
+
+    [Fact]
+    public void Brace_RegexActuallyMatches()
+    {
+        var regex = WildcardPattern.Compile("*.{cs,fs}").ToRegex();
+        Assert.True(regex.IsMatch("file.cs"));
+        Assert.True(regex.IsMatch("file.fs"));
+        Assert.False(regex.IsMatch("file.vb"));
+    }
 }
