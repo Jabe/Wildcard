@@ -4,32 +4,84 @@ on:
   release:
     types: [published]
 
+env:
+  DOTNET_VERSION: '10.0.x'
+
 jobs:
-  publish:
+  build-and-test:
     runs-on: ubuntu-latest
-
-    env:
-      VERSION: ${{ github.ref_name }}
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Build
-        run: dotnet build -c Release -p:Version=${VERSION#v}
+        run: dotnet build -c Release -p:Version=${GITHUB_REF_NAME#v}
 
       - name: Test
         run: dotnet test --no-build -c Release
 
+  nuget:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
       - name: Pack library
-        run: dotnet pack src/Wildcard/Wildcard.csproj -c Release --no-build -o ./nupkgs -p:Version=${VERSION#v}
+        run: dotnet pack src/Wildcard/Wildcard.csproj -c Release -o ./nupkgs -p:Version=${GITHUB_REF_NAME#v}
 
       - name: Pack CLI tool
-        run: dotnet pack src/Wildcard.Cli/Wildcard.Cli.csproj -c Release --no-build -o ./nupkgs -p:Version=${VERSION#v}
+        run: dotnet pack src/Wildcard.Cli/Wildcard.Cli.csproj -c Release -o ./nupkgs -p:Version=${GITHUB_REF_NAME#v}
 
       - name: Push to NuGet
         run: dotnet nuget push ./nupkgs/*.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+
+  native:
+    needs: build-and-test
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            rid: osx-arm64
+            artifact: wcg-osx-arm64
+          - os: macos-13
+            rid: osx-x64
+            artifact: wcg-osx-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: wcg-linux-x64
+          - os: windows-latest
+            rid: win-x64
+            artifact: wcg-win-x64.exe
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish native AOT
+        shell: bash
+        run: dotnet publish src/Wildcard.Cli -c Release -r ${{ matrix.rid }} --self-contained -p:PublishAot=true -p:Version=${GITHUB_REF_NAME#v} -o ./native
+
+      - name: Rename binary
+        shell: bash
+        run: mv ./native/wcg$([ "${{ matrix.rid }}" = "win-x64" ] && echo ".exe" || echo "") ./native/${{ matrix.artifact }}
+
+      - name: Upload release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.ref_name }} ./native/${{ matrix.artifact }} --clobber
