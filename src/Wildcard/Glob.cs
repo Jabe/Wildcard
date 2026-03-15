@@ -979,9 +979,13 @@ public sealed class Glob
                 };
             }
 
-            // Not following symlinks — use fast Directory.EnumerateDirectories, wrap as DirEntry(IsSymlink: false)
-            return Directory.EnumerateDirectories(directory, "*", SkipSymlinksOptions)
-                .Select(static d => new DirEntry(d, false));
+            // Not following symlinks — use FileSystemEnumerable directly to avoid LINQ iterator allocation
+            return new FileSystemEnumerable<DirEntry>(directory,
+                static (ref FileSystemEntry entry) => new DirEntry(entry.ToFullPath(), false),
+                SkipSymlinksOptions)
+            {
+                ShouldIncludePredicate = static (ref FileSystemEntry entry) => entry.IsDirectory
+            };
         }
         catch (DirectoryNotFoundException) { return []; }
     }
