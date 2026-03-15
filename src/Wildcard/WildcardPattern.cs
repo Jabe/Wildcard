@@ -570,39 +570,9 @@ public sealed class WildcardPattern
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool MatchCharClass(in Segment seg, char c, bool ignoreCase)
     {
-        bool found;
-
-        if (seg.SearchChars is not null)
-        {
-            // SIMD-accelerated path using SearchValues<char>
-            // For case-insensitive patterns, SearchValues already contains both cases
-            found = seg.SearchChars.Contains(c);
-        }
-        else
-        {
-            found = false;
-            foreach (var range in seg.Ranges.AsSpan())
-            {
-                if (ignoreCase)
-                {
-                    char cu = char.ToUpperInvariant(c);
-                    if (cu >= char.ToUpperInvariant(range.Lo) && cu <= char.ToUpperInvariant(range.Hi))
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                else
-                {
-                    if (c >= range.Lo && c <= range.Hi)
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-        }
-
+        // SearchChars is always non-null for CharClass segments (CreateSearchValues never returns null).
+        // SIMD-accelerated path; for case-insensitive patterns, SearchValues already contains both cases.
+        bool found = seg.SearchChars!.Contains(c);
         return seg.Negated ? !found : found;
     }
 
