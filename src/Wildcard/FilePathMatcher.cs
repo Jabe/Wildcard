@@ -199,9 +199,7 @@ public sealed class FilePathMatcher
 
         if (fileLength > int.MaxValue)
         {
-            var results = new List<LineMatch>();
-            ScanFileLargeMapped(filePath, fileLength, results);
-            return results.Count > 0;
+            return ContainsMatchLargeMapped(filePath, fileLength);
         }
 
         return ContainsMatchMemoryMapped(filePath, fileLength);
@@ -260,7 +258,6 @@ public sealed class FilePathMatcher
         try
         {
             int pos = 0;
-            var singleResult = new List<LineMatch>();
 
             while (pos < data.Length)
             {
@@ -279,8 +276,8 @@ public sealed class FilePathMatcher
                     lineBytes = data.Slice(pos, nlIdx);
                 }
 
-                ProcessLine(string.Empty, lineBytes, 0, charBuffer, singleResult);
-                if (singleResult.Count > 0) return true;
+                if (ProcessLineContains(lineBytes, charBuffer))
+                    return true;
 
                 if (isLastLine) break;
                 pos += nlIdx + 1;
@@ -795,18 +792,22 @@ public sealed class FilePathMatcher
         }
     }
 
+    /// <summary>
+    /// Byte-level pre-filter: strips \r, checks min length, applies byte/multi-byte filters.
+    /// Returns false if the line can be skipped. Sets <paramref name="exactByteMatch"/> to true
+    /// when the byte filter is definitive (no char decode needed to confirm the match).
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ProcessLine(string filePath, ReadOnlySpan<byte> lineBytes, int lineNumber, char[] charBuffer, List<LineMatch> results)
+    private bool PreFilterLine(ref ReadOnlySpan<byte> lineBytes, out bool exactByteMatch)
     {
-        // Strip trailing \r
+        exactByteMatch = false;
+
         if (lineBytes.Length > 0 && lineBytes[^1] == (byte)'\r')
             lineBytes = lineBytes[..^1];
 
-        // Minimum length pre-filter (byte length >= char length for UTF-8)
         if (lineBytes.Length < _minLineLength)
-            return;
+            return false;
 
-        // Byte-level pre-filter: avoid decoding non-matching lines
         if (_bytePreFilterEnabled)
         {
             bool byteMatch = _bytePreFilterShape switch
@@ -824,47 +825,143 @@ public sealed class FilePathMatcher
                 _ => true,
             };
 
-            if (!byteMatch) return;
+            if (!byteMatch) return false;
 
-            // Byte filter is exact for ASCII/UTF-8 — skip IsLineMatch when no excludes
+            // Byte filter is exact for ASCII/UTF-8 when no excludes
             if (_excludes is null)
             {
-                int c = DecodeToChars(lineBytes, charBuffer, out var big);
-                try
-                {
-                    var span = big is not null ? big.AsSpan(0, c) : charBuffer.AsSpan(0, c);
-                    results.Add(new LineMatch(filePath, lineNumber, span.ToString()));
-                }
-                finally
-                {
-                    if (big is not null) ArrayPool<char>.Shared.Return(big);
-                }
-                return;
+                exactByteMatch = true;
+                return true;
             }
         }
         else if (_multiBytePreFilterEnabled)
         {
-            // Multi-include OR: skip decoding only when ALL per-pattern byte filters reject this line.
             bool anyPass = false;
             foreach (ref readonly var filter in _perIncludeByteFilters!.AsSpan())
             {
                 if (ByteFilterMatches(lineBytes, in filter)) { anyPass = true; break; }
             }
-            if (!anyPass) return;
+            if (!anyPass) return false;
         }
 
-        // Decode to chars
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ProcessLine(string filePath, ReadOnlySpan<byte> lineBytes, int lineNumber, char[] charBuffer, List<LineMatch> results)
+    {
+        if (!PreFilterLine(ref lineBytes, out bool exactByteMatch))
+            return;
+
         int charCount = DecodeToChars(lineBytes, charBuffer, out var bigBuffer);
         try
         {
             var lineChars = bigBuffer is not null ? bigBuffer.AsSpan(0, charCount) : charBuffer.AsSpan(0, charCount);
-            if (IsLineMatch(lineChars))
+            if (exactByteMatch || IsLineMatch(lineChars))
                 results.Add(new LineMatch(filePath, lineNumber, lineChars.ToString()));
         }
         finally
         {
             if (bigBuffer is not null) ArrayPool<char>.Shared.Return(bigBuffer);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool ProcessLineContains(ReadOnlySpan<byte> lineBytes, char[] charBuffer)
+    {
+        if (!PreFilterLine(ref lineBytes, out bool exactByteMatch))
+            return false;
+
+        // Byte filter is definitive — no need to decode
+        if (exactByteMatch)
+            return true;
+
+        int charCount = DecodeToChars(lineBytes, charBuffer, out var bigBuffer);
+        try
+        {
+            var lineChars = bigBuffer is not null ? bigBuffer.AsSpan(0, charCount) : charBuffer.AsSpan(0, charCount);
+            return IsLineMatch(lineChars);
+        }
+        finally
+        {
+            if (bigBuffer is not null) ArrayPool<char>.Shared.Return(bigBuffer);
+        }
+    }
+
+    private unsafe bool ContainsMatchLargeMapped(string filePath, long fileLength)
+    {
+        const long sectionSize = 1L * 1024 * 1024 * 1024;
+
+        using var mmf = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
+
+        var charBuffer = ArrayPool<char>.Shared.Rent(65536);
+        try
+        {
+            long offset = 0;
+            bool firstSection = true;
+            int pendingSkipBytes = 0;
+
+            while (offset < fileLength)
+            {
+                long remaining = fileLength - offset;
+                long viewSize = Math.Min(sectionSize + (offset > 0 ? 1024 * 1024 : 0), remaining);
+
+                using var accessor = mmf.CreateViewAccessor(offset, viewSize, MemoryMappedFileAccess.Read);
+                byte* ptr = null;
+                accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+                try
+                {
+                    ptr += accessor.PointerOffset;
+                    var sectionSpan = new ReadOnlySpan<byte>(ptr, (int)viewSize);
+
+                    int startOffset = pendingSkipBytes;
+
+                    if (firstSection && sectionSpan.Length >= 3 &&
+                        sectionSpan[0] == 0xEF && sectionSpan[1] == 0xBB && sectionSpan[2] == 0xBF)
+                    {
+                        startOffset = Math.Max(startOffset, 3);
+                        firstSection = false;
+                    }
+
+                    var scanSpan = sectionSpan[startOffset..];
+                    int pos = 0;
+
+                    while (pos < scanSpan.Length)
+                    {
+                        int nlIdx = scanSpan[pos..].IndexOf((byte)'\n');
+                        if (nlIdx < 0)
+                        {
+                            if (offset + viewSize >= fileLength)
+                            {
+                                var lastLine = scanSpan[pos..];
+                                if (lastLine.Length > 0 && ProcessLineContains(lastLine, charBuffer))
+                                    return true;
+                            }
+                            break;
+                        }
+
+                        var lineBytes = scanSpan.Slice(pos, nlIdx);
+                        if (ProcessLineContains(lineBytes, charBuffer))
+                            return true;
+                        pos += nlIdx + 1;
+                    }
+
+                    long processed = startOffset + pos;
+                    offset += processed;
+                    pendingSkipBytes = 0;
+                }
+                finally
+                {
+                    accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(charBuffer);
+        }
+
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
