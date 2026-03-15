@@ -20,6 +20,10 @@
     <PackageTags>grep;glob;wildcard;search;cli;tool</PackageTags>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Wildcard\Wildcard.csproj" />
   </ItemGroup>
