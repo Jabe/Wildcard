@@ -157,14 +157,27 @@ A command-line grep tool built on top of the library. Respects `.gitignore` by d
 
 #### Install
 
+**Option A — .NET tool** (cross-platform, requires .NET 10 runtime):
+
 ```bash
 dotnet tool install -g wcg
+dotnet tool update -g wcg   # to update
 ```
 
-#### Update
+**Option B — Native binary** (single file, no dependencies, ~4MB):
+
+Download the latest binary for your platform from [GitHub Releases](https://github.com/Jabe/Wildcard/releases):
+
+| Platform | Binary |
+|----------|--------|
+| macOS (Apple Silicon) | `wcg-osx-arm64` |
+| Linux (x64) | `wcg-linux-x64` |
+| Windows (x64) | `wcg-win-x64.exe` |
 
 ```bash
-dotnet tool update -g wcg
+# macOS / Linux
+chmod +x wcg-osx-arm64
+sudo mv wcg-osx-arm64 /usr/local/bin/wcg
 ```
 
 #### Usage
@@ -289,22 +302,18 @@ Pattern `*ERROR*` across 4 log files (~12.5% matching lines). Compared against `
 | medium (100K lines) | 52,811 µs | 7,796 µs | 0.15 | 0.15 |
 | large (1M lines) | 558,834 µs | 110,174 µs | 0.20 | 0.15 |
 
-### CLI — `wcg` vs `find`, `grep`, `ripgrep`
+### CLI — `wcg` vs `find+grep`, `ripgrep`
 
-Real-world benchmark on `~/Code` (~5.4k .cs files, ~5.3k .json files across multiple git repos). Apple M4 Pro, .NET 10.0.
+Real-world content search on `~/Code` (~130k files across multiple git repos). Apple M4 Pro, .NET 10.0.
 
-| Task | `find` | `grep -r` | `rg` | `wcg` |
-|------|--------|-----------|------|-------|
-| Find all .cs files | 16.6s | — | — | **7.7s** |
-| Find all .json files | 16.7s | — | — | **7.7s** |
-| Deep glob `**/bin/**/*.dll` | 17.2s | — | — | **5.9s** |
-| Search `namespace` in .cs | — | 16.4s | **1.1s** | 2.7s |
-| Search `TODO` in .cs | — | 16.7s | **1.1s** | 2.7s |
-| Case-insensitive `error` in .json | — | 40.5s | **1.0s** | 2.6s |
+| Tool | Wall time | CPU% |
+|------|-----------|------|
+| `find+grep` | 17.9s | 39% |
+| `wcg` (dotnet tool) | 1.66s | 478% |
+| `wcg` (native AOT) | 1.50s | 447% |
+| `rg` (ripgrep) | **1.26s** | 316% |
 
-`wcg` beats `find` by **~2x** for file discovery and `grep` by **~6x** for content search. `.gitignore` filtering (on by default) prunes `bin/`, `obj/`, `node_modules/` etc. during traversal. Parallelized content scanning overlaps glob enumeration with file I/O. Symbolic links are skipped by default, avoiding unnecessary traversal.
-
-`ripgrep` remains the fastest content search tool thanks to SIMD-accelerated string matching and parallel directory walking.
+`wcg` is within **19% of ripgrep** for content search. `.gitignore` filtering (on by default) prunes `bin/`, `obj/`, `node_modules/` etc. during traversal. Work-stealing parallel glob overlaps directory enumeration with I/O-bound content scanning. The native AOT binary adds ~10% wall-clock improvement and 10ms cold startup.
 
 ## How It Works
 
@@ -358,7 +367,7 @@ This approach avoids the exponential worst-case that naive recursive implementat
 
 `FilePathMatcher` scans files on disk using memory-mapped I/O and parallel processing:
 
-- **Memory-mapped I/O** — files are mapped directly into memory, avoiding buffered read overhead. Files over 2GB are processed in 1GB overlapping sections.
+- **Adaptive file I/O** — small files (≤64KB) use pooled buffered reads; larger files use memory-mapped I/O. Files over 2GB are processed in 1GB overlapping sections.
 - **Byte-level pre-filtering** — for ASCII, case-sensitive patterns over UTF-8 data, pattern matching runs directly on raw bytes using SIMD-accelerated span operations (`IndexOf`, `StartsWith`, `EndsWith`). Lines that don't match skip UTF-8 decoding entirely. When multiple include patterns are given, each pattern gets its own byte-level filter; a line is skipped only when all filters reject it.
 - **Minimum length gate** — lines shorter than the pattern's minimum possible match length are rejected before any decoding or matching.
 - **Parallel multi-file scanning** — multiple files are scanned concurrently via `Parallel.For`, with results merged preserving file order.
