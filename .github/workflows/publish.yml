@@ -52,9 +52,6 @@ jobs:
           - os: macos-latest
             rid: osx-arm64
             artifact: wcg-osx-arm64
-          - os: macos-13
-            rid: osx-x64
-            artifact: wcg-osx-x64
           - os: ubuntu-latest
             rid: linux-x64
             artifact: wcg-linux-x64
