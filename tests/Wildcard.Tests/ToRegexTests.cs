@@ -99,4 +99,41 @@ public class ToRegexTests
         var regex = WildcardPattern.Compile(pattern).ToRegex();
         Assert.Equal(expectedRegex, regex.ToString());
     }
+
+    [Fact]
+    public void EscapedCharInCharClass_CompilesAndMatches()
+    {
+        // Pattern [\]] should match a literal ]
+        var p = WildcardPattern.Compile("[\\]]");
+        Assert.True(p.IsMatch("]"));
+        Assert.False(p.IsMatch("a"));
+
+        var regex = p.ToRegex();
+        Assert.Matches(regex, "]");
+    }
+
+    [Fact]
+    public void EscapedRangeEndInCharClass_CompilesAndMatches()
+    {
+        // Pattern [Z-\]] should match chars in range Z (90) to ] (93)
+        var p = WildcardPattern.Compile("[Z-\\]]");
+        Assert.True(p.IsMatch("]"));
+        Assert.True(p.IsMatch("Z"));
+        Assert.True(p.IsMatch("["));  // ASCII 91, between Z and ]
+        Assert.False(p.IsMatch("a"));
+
+        var regex = p.ToRegex();
+        Assert.Matches(regex, "]");
+        Assert.Matches(regex, "Z");
+    }
+
+    [Fact]
+    public void EscapedCharInsideBracket_ToRegex()
+    {
+        // Escaped special char inside bracket expression in ToRegex conversion
+        var p = WildcardPattern.Compile("[\\*]");
+        var regex = p.ToRegex();
+        Assert.Matches(regex, "*");
+        Assert.DoesNotMatch(regex, "a");
+    }
 }

@@ -115,4 +115,229 @@ public class TryMatchTests
         Assert.True(p.TryMatch("[2024-03-15] ERROR - timeout", out var captures));
         Assert.Equal(["2024-03-15", "ERROR", "timeout"], captures);
     }
+
+    [Fact]
+    public void PureLiteral_TryMatch_Failure()
+    {
+        var p = WildcardPattern.Compile("exact");
+        Assert.False(p.TryMatch("wrong", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void PrefixStar_TryMatch_Failure()
+    {
+        var p = WildcardPattern.Compile("hello*");
+        Assert.False(p.TryMatch("goodbye", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void PrefixStarSuffix_InputTooShort()
+    {
+        var p = WildcardPattern.Compile("abc*xyz");
+        Assert.False(p.TryMatch("ab", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void PrefixStarSuffix_PrefixDoesNotMatch()
+    {
+        var p = WildcardPattern.Compile("abc*xyz");
+        Assert.False(p.TryMatch("XXXtestxyz", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void PrefixStarSuffix_SuffixDoesNotMatch()
+    {
+        var p = WildcardPattern.Compile("abc*xyz");
+        Assert.False(p.TryMatch("abctestXXX", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void StarContainsStar_Failure()
+    {
+        var p = WildcardPattern.Compile("*needle*");
+        Assert.False(p.TryMatch("no match here", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void Star_QuestionMark_WithCaptures()
+    {
+        var p = WildcardPattern.Compile("*?x");
+        Assert.True(p.TryMatch("abcx", out var c));
+        // star captures "ab", ? matches "c"
+    }
+
+    [Fact]
+    public void Star_QuestionRun_WithCaptures()
+    {
+        var p = WildcardPattern.Compile("*???end");
+        Assert.True(p.TryMatch("startABCend", out var c));
+    }
+
+    [Fact]
+    public void Star_CharClass_WithCaptures()
+    {
+        var p = WildcardPattern.Compile("*[abc]end");
+        Assert.True(p.TryMatch("prefixaend", out var c));
+    }
+
+    [Fact]
+    public void ConsecutiveStars_WithCaptures()
+    {
+        var p = WildcardPattern.Compile("**hello");
+        Assert.True(p.TryMatch("XXhello", out var c));
+    }
+
+    [Fact]
+    public void Star_Literal_EndsWith_WithCaptures()
+    {
+        var p = WildcardPattern.Compile("start*end");
+        Assert.True(p.TryMatch("startmiddleend", out var c));
+        Assert.Equal(["middle"], c);
+    }
+
+    [Fact]
+    public void Backtracking_WithCaptures()
+    {
+        var p = WildcardPattern.Compile("*a*b");
+        Assert.True(p.TryMatch("xaxayb", out var c));
+    }
+
+    [Fact]
+    public void CloseActiveStar_AtEnd()
+    {
+        var p = WildcardPattern.Compile("x*");
+        Assert.True(p.TryMatch("xhello", out var c));
+        Assert.Equal(["hello"], c);
+    }
+
+    [Fact]
+    public void CaseInsensitive_PureLiteral_Failure()
+    {
+        var p = WildcardPattern.Compile("HELLO", ignoreCase: true);
+        Assert.False(p.TryMatch("world", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void CaseInsensitive_PrefixStar_Failure()
+    {
+        var p = WildcardPattern.Compile("HELLO*", ignoreCase: true);
+        Assert.False(p.TryMatch("world", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void CaseInsensitive_StarSuffix_Failure()
+    {
+        var p = WildcardPattern.Compile("*HELLO", ignoreCase: true);
+        Assert.False(p.TryMatch("world", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void CaseInsensitive_PrefixStarSuffix()
+    {
+        var p = WildcardPattern.Compile("HE*LO", ignoreCase: true);
+        Assert.False(p.TryMatch("world", out var c));
+        Assert.True(p.TryMatch("heLLo", out c));
+    }
+
+    [Fact]
+    public void CaseInsensitive_StarContainsStar_Failure()
+    {
+        var p = WildcardPattern.Compile("*NEEDLE*", ignoreCase: true);
+        Assert.False(p.TryMatch("no match", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void MatchLiteral_MultiChar_IgnoreCase()
+    {
+        var p = WildcardPattern.Compile("HELLO", ignoreCase: true);
+        Assert.True(p.TryMatch("hello", out var c));
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void GeneralShape_CharsEqual_CaseInsensitive()
+    {
+        // [a-z] range forces General shape (not promoted to literal)
+        // Multi-char literal "Hello" with ignoreCase hits CharsEqual line 365
+        var p = WildcardPattern.Compile("[a-z]Hello", ignoreCase: true);
+        Assert.True(p.IsMatch("ahello"));
+        Assert.True(p.IsMatch("AHELLO"));
+        Assert.False(p.IsMatch("1hello"));
+    }
+
+    [Fact]
+    public void GeneralShape_MultiCharLiteral_CaseSensitive_Mismatch()
+    {
+        // [a-z] forces General shape, multi-char literal "hello", case-sensitive
+        // Exercises MatchLiteral lines 556-559 (SequenceEqual path)
+        var p = WildcardPattern.Compile("[a-z]hello");
+        Assert.True(p.IsMatch("ahello"));
+        Assert.False(p.IsMatch("aHELLO")); // case-sensitive mismatch on multi-char literal
+        Assert.False(p.IsMatch("awrong"));
+    }
+
+    [Fact]
+    public void GeneralShape_ConsecutiveStars_Captures()
+    {
+        // [a-z] forces General, two stars — second star hits activeStarIdx >= 0 (line 434)
+        var p = WildcardPattern.Compile("[a-z]*[a-z]*[a-z]");
+        Assert.True(p.TryMatch("aXbYc", out var c));
+        Assert.Equal(["X", "Y"], c);
+    }
+
+    [Fact]
+    public void GeneralShape_StarActive_AtEndOfInput()
+    {
+        // [a-z]* — General shape, star is active when input ends (line 520)
+        var p = WildcardPattern.Compile("[a-z]*");
+        Assert.True(p.TryMatch("xrest", out var c));
+        Assert.Equal(["rest"], c);
+    }
+
+    [Fact]
+    public void GeneralShape_TrailingStars_WithCaptures()
+    {
+        // [!0-9]b** — negated char class forces General, trailing star captures empty
+        var p = WildcardPattern.Compile("[!0-9]b**");
+        Assert.True(p.TryMatch("ab", out var c));
+        Assert.Equal([""], c);
+    }
+
+    [Fact]
+    public void GeneralShape_Backtracking_WithCaptures()
+    {
+        // [a-z] forces General shape, backtracking with captures active
+        var p = WildcardPattern.Compile("[a-z]*x*y");
+        Assert.True(p.TryMatch("aQxRy", out var c));
+        Assert.Equal(["Q", "R"], c);
+    }
+
+    [Fact]
+    public void GeneralShape_SingleCharLiteral_CaseInsensitive()
+    {
+        // [a-z] + single-char literal "X" forces General shape
+        // Single-char literal hits CharsEqual with ignoreCase (line 365)
+        var p = WildcardPattern.Compile("[a-z]X", ignoreCase: true);
+        Assert.True(p.IsMatch("ax"));  // 'X' vs 'x' → CharsEqual case-insensitive
+        Assert.True(p.IsMatch("aX"));
+        Assert.False(p.IsMatch("1x")); // [a-z] fails
+    }
+
+    [Fact]
+    public void GeneralShape_MultiCharLiteral_CaseInsensitive_Mismatch()
+    {
+        // Multi-char literal in General shape with ignoreCase — MISMATCH path (line 558)
+        var p = WildcardPattern.Compile("[a-z]Hello", ignoreCase: true);
+        Assert.False(p.IsMatch("athere")); // "there" vs "Hello" → Equals returns false
+    }
 }

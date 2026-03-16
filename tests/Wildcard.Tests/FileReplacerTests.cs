@@ -314,4 +314,124 @@ public class FileReplacerTests : IDisposable
             File.SetUnixFileMode(lockedDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
+
+    // --- Wildcard pattern Apply ---
+
+    [Fact]
+    public void Apply_WildcardPattern_AppliesCaptureReplacement()
+    {
+        var file = CreateFile("pattern.txt", "prefix_old_suffix\nanother_old_line\nno match here\n");
+        var results = FileReplacer.Apply([file], "*old*", "$1new$2");
+
+        Assert.Single(results);
+        Assert.Equal(2, results[0].Replacements.Count);
+        Assert.Equal("prefix_new_suffix", results[0].Replacements[0].ReplacedLine);
+        Assert.Equal("another_new_line", results[0].Replacements[1].ReplacedLine);
+
+        var content = File.ReadAllText(file);
+        Assert.Contains("prefix_new_suffix", content);
+        Assert.Contains("another_new_line", content);
+        Assert.DoesNotContain("old", content);
+    }
+
+    [Fact]
+    public void Apply_WildcardPattern_NoActualChanges_ReturnsEmpty()
+    {
+        // Pattern matches entire line via *, but replacement reproduces the original
+        var file = CreateFile("nochange.txt", "hello world\n");
+        var results = FileReplacer.Apply([file], "*", "$1");
+
+        Assert.Empty(results);
+        Assert.Equal("hello world\n", File.ReadAllText(file));
+    }
+
+    // --- File too large ---
+
+    [Fact]
+    public void Preview_SkipsFileLargerThan10MB()
+    {
+        var file = Path.Combine(_tempDir, "large.txt");
+        // Create a file just over 10MB
+        using (var fs = new FileStream(file, FileMode.Create, FileAccess.Write))
+        {
+            var line = Encoding.UTF8.GetBytes("ERROR this line repeats\n");
+            long target = 10 * 1024 * 1024 + 1;
+            while (fs.Length < target)
+                fs.Write(line, 0, line.Length);
+        }
+
+        var previewResults = FileReplacer.Preview([file], "ERROR", "WARNING");
+        Assert.Empty(previewResults);
+
+        var applyResults = FileReplacer.Apply([file], "ERROR", "WARNING");
+        Assert.Empty(applyResults);
+    }
+
+    // --- Apply IOException during write ---
+
+    [Fact]
+    public void Apply_ReportsError_WhenWriteFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // Create file in a subdirectory, then remove write permission on the dir
+        var noWriteDir = Path.Combine(_tempDir, "nowrite");
+        Directory.CreateDirectory(noWriteDir);
+        var file = Path.Combine(noWriteDir, "target.txt");
+        File.WriteAllText(file, "ERROR here\n");
+
+        File.SetUnixFileMode(noWriteDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try
+        {
+            var results = FileReplacer.Apply([file], "ERROR", "WARNING");
+            var errors = results.Where(r => r.Error is not null).ToList();
+            Assert.Single(errors);
+            Assert.NotNull(errors[0].Error);
+        }
+        finally
+        {
+            File.SetUnixFileMode(noWriteDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    // --- ComputeReplacements with wildcard pattern ---
+
+    [Fact]
+    public void Preview_WildcardPattern_FindsReplacements()
+    {
+        var file = CreateFile("wildcard_preview.txt", "start_old_end\nkeep this\nbegin_old_finish\n");
+        var results = FileReplacer.Preview([file], "*old*", "$1new$2");
+
+        Assert.Single(results);
+        Assert.Equal(2, results[0].Replacements.Count);
+        Assert.Equal("start_new_end", results[0].Replacements[0].ReplacedLine);
+        Assert.Equal("begin_new_finish", results[0].Replacements[1].ReplacedLine);
+    }
+
+    // --- CanProcessFile IOException / UnauthorizedAccessException during binary detection ---
+
+    [Fact]
+    public void Preview_SkipsFile_WhenBinaryCheckThrowsIOException()
+    {
+        // A file path that exists but cannot be opened triggers IOException in CanProcessFile.
+        // We simulate this by using a FIFO (named pipe) which exists and has non-zero
+        // apparent length issues, but we can also simulate by removing read permission.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var file = CreateFile("noread.txt", "ERROR here\n");
+        File.SetUnixFileMode(file, UnixFileMode.None);
+
+        try
+        {
+            var results = FileReplacer.Preview([file], "ERROR", "WARNING");
+            Assert.Empty(results);
+        }
+        finally
+        {
+            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
 }

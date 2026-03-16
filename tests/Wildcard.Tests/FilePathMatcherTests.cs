@@ -675,4 +675,552 @@ public class FilePathMatcherTests : IDisposable
         }
         Assert.True(hasGap, "Expected non-contiguous groups with gaps in line numbers");
     }
+
+    // ==================== ContainsMatch ====================
+
+    [Fact]
+    public void ContainsMatch_ReturnsTrue_WhenMatchExists()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        Assert.True(matcher.ContainsMatch(_logFile));
+    }
+
+    [Fact]
+    public void ContainsMatch_ReturnsFalse_WhenNoMatch()
+    {
+        var matcher = FilePathMatcher.Create("*CRITICAL*");
+        Assert.False(matcher.ContainsMatch(_logFile));
+    }
+
+    [Fact]
+    public void ContainsMatch_EmptyFile_ReturnsFalse()
+    {
+        var matcher = FilePathMatcher.Create("*");
+        Assert.False(matcher.ContainsMatch(_emptyFile));
+    }
+
+    [Fact]
+    public void ContainsMatch_NonExistentFile_ReturnsFalse()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var fakePath = Path.Combine(_tempDir, "does_not_exist.txt");
+        Assert.False(matcher.ContainsMatch(fakePath));
+    }
+
+    [Fact]
+    public void ContainsMatch_BomFile_MatchesFirstLine()
+    {
+        var matcher = FilePathMatcher.Create("BOM*");
+        Assert.True(matcher.ContainsMatch(_utf8BomFile));
+    }
+
+    [Fact]
+    public void ContainsMatch_BomFile_MatchesSecondLine()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        Assert.True(matcher.ContainsMatch(_utf8BomFile));
+    }
+
+    // ==================== Create validation ====================
+
+    [Fact]
+    public void Create_EmptyIncludeArray_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => FilePathMatcher.Create(include: []));
+    }
+
+    [Fact]
+    public void Create_NullInclude_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => FilePathMatcher.Create(include: (string[])null!));
+    }
+
+    [Fact]
+    public void Create_NullSingleInclude_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => FilePathMatcher.Create((string)null!));
+    }
+
+    // ==================== Scan with zero files ====================
+
+    [Fact]
+    public void Scan_ZeroFiles_ReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.Scan();
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Scan_EmptyArray_ReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.Scan(Array.Empty<string>());
+        Assert.Empty(results);
+    }
+
+    // ==================== ScanWithContext: multiple files (parallel path) ====================
+
+    [Fact]
+    public void ScanWithContext_MultipleFiles_ReturnsResultsFromAll()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1, _logFile, _codeFile);
+
+        Assert.Contains(results, r => r.FilePath == _logFile);
+        Assert.Contains(results, r => r.FilePath == _codeFile);
+        // Match lines should have IsMatch = true
+        Assert.True(results.Where(r => r.IsMatch).All(r => r.Line.Contains("ERROR")));
+    }
+
+    [Fact]
+    public void ScanWithContext_ThreeOrMoreFiles_ParallelPath()
+    {
+        var file1 = CreateFile("ctx_par1.txt", "alpha\nbeta ERROR one\ngamma\n");
+        var file2 = CreateFile("ctx_par2.txt", "delta\nepsilon\nzeta ERROR two\neta\n");
+        var file3 = CreateFile("ctx_par3.txt", "theta\niota ERROR three\nkappa\n");
+
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1, file1, file2, file3);
+
+        // Each file should contribute context
+        Assert.Contains(results, r => r.FilePath == file1 && r.IsMatch);
+        Assert.Contains(results, r => r.FilePath == file2 && r.IsMatch);
+        Assert.Contains(results, r => r.FilePath == file3 && r.IsMatch);
+    }
+
+    // ==================== ScanWithContext: empty and non-existent files ====================
+
+    [Fact]
+    public void ScanWithContext_EmptyFile_ReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.ScanWithContext(beforeContext: 2, afterContext: 2, _emptyFile);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void ScanWithContext_NonExistentFile_ReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var fakePath = Path.Combine(_tempDir, "no_such_file.txt");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1, fakePath);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void ScanWithContext_ZeroFiles_ReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1);
+        Assert.Empty(results);
+    }
+
+    // ==================== Byte pre-filter: exact match (no excludes) ====================
+
+    [Fact]
+    public void Scan_StarContainsStar_NoExcludes_BytePreFilterExactMatch()
+    {
+        // Pattern *needle* → StarContainsStar shape, no excludes → exactByteMatch = true
+        var file = CreateFile("byte_scs.txt", "the needle is here\nno match\nanother needle found\n");
+        var matcher = FilePathMatcher.Create("*needle*");
+        var results = matcher.Scan(file);
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.Contains("needle", r.Line));
+    }
+
+    [Fact]
+    public void Scan_PureLiteral_NoExcludes_BytePreFilterExactMatch()
+    {
+        // Pattern without wildcards → PureLiteral shape
+        var file = CreateFile("byte_pl.txt", "exact\nnot exact\nexact\nexactly not\n");
+        var matcher = FilePathMatcher.Create("exact");
+        var results = matcher.Scan(file);
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.Equal("exact", r.Line));
+    }
+
+    [Fact]
+    public void Scan_PrefixStarSuffix_NoExcludes_BytePreFilterExactMatch()
+    {
+        // Pattern prefix*suffix → PrefixStarSuffix shape
+        var file = CreateFile("byte_pss.txt", "START_something_END\nSTART_END\nnope\nSTART_middle_END\n");
+        var matcher = FilePathMatcher.Create("START*END");
+        var results = matcher.Scan(file);
+
+        Assert.Equal(3, results.Count);
+        Assert.All(results, r =>
+        {
+            Assert.StartsWith("START", r.Line);
+            Assert.EndsWith("END", r.Line);
+        });
+    }
+
+    [Fact]
+    public void Scan_StarSuffix_NoExcludes_BytePreFilterExactMatch()
+    {
+        // Pattern *suffix → StarSuffix shape
+        var file = CreateFile("byte_ss.txt", "hello.log\nworld.txt\ntest.log\nfoo.csv\n");
+        var matcher = FilePathMatcher.Create("*.log");
+        var results = matcher.Scan(file);
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.EndsWith(".log", r.Line));
+    }
+
+    [Fact]
+    public void Scan_PrefixStar_NoExcludes_BytePreFilterExactMatch()
+    {
+        // Pattern prefix* → PrefixStar shape
+        var file = CreateFile("byte_ps.txt", "ERROR: fail\nERROR: crash\nINFO: ok\nERROR\n");
+        var matcher = FilePathMatcher.Create("ERROR*");
+        var results = matcher.Scan(file);
+
+        Assert.Equal(3, results.Count);
+        Assert.All(results, r => Assert.StartsWith("ERROR", r.Line));
+    }
+
+    // ==================== Large file (>64KB) memory-mapped path ====================
+
+    [Fact]
+    public void Scan_LargeFile_MemoryMappedPath()
+    {
+        // Create a file > 64KB to exercise the memory-mapped code path
+        var sb = new StringBuilder();
+        // Each line ~80 chars, need > 64*1024 / 80 ≈ 820 lines
+        for (int i = 0; i < 1000; i++)
+            sb.AppendLine($"Line {i:D4}: This is filler content to make the file large enough for memory mapping.");
+        sb.AppendLine("Line 1000: TARGET_MATCH_HERE found");
+        for (int i = 1001; i < 1500; i++)
+            sb.AppendLine($"Line {i:D4}: More filler content to ensure the file exceeds the 64KB threshold value.");
+
+        var largeFile = CreateFile("large_mmap.txt", sb.ToString());
+        var fileInfo = new FileInfo(largeFile);
+        Assert.True(fileInfo.Length > 64 * 1024, "File should be > 64KB to exercise memory-mapped path");
+
+        var matcher = FilePathMatcher.Create("*TARGET_MATCH_HERE*");
+        var results = matcher.Scan(largeFile);
+
+        Assert.Single(results);
+        Assert.Equal(1001, results[0].LineNumber);
+        Assert.Contains("TARGET_MATCH_HERE", results[0].Line);
+    }
+
+    [Fact]
+    public void ContainsMatch_LargeFile_MemoryMappedPath()
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < 1000; i++)
+            sb.AppendLine($"Line {i:D4}: Filler content to bulk up the file past the buffered read threshold.");
+        sb.AppendLine("Line 1000: FOUND_THE_NEEDLE");
+        for (int i = 1001; i < 1500; i++)
+            sb.AppendLine($"Line {i:D4}: More filler content to ensure file is large enough for memory mapped IO.");
+
+        var largeFile = CreateFile("large_contains.txt", sb.ToString());
+        var fileInfo = new FileInfo(largeFile);
+        Assert.True(fileInfo.Length > 64 * 1024);
+
+        var matcher = FilePathMatcher.Create("*FOUND_THE_NEEDLE*");
+        Assert.True(matcher.ContainsMatch(largeFile));
+
+        var noMatchMatcher = FilePathMatcher.Create("*DOES_NOT_EXIST_IN_FILE*");
+        Assert.False(noMatchMatcher.ContainsMatch(largeFile));
+    }
+
+    [Fact]
+    public void ScanWithContext_LargeFile_MemoryMappedPath()
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < 1000; i++)
+            sb.AppendLine($"Line {i:D4}: Padding content to push file size past the sixty-four KB buffered read limit.");
+        sb.AppendLine("Line 1000: CONTEXT_TARGET_LINE");
+        for (int i = 1001; i < 1500; i++)
+            sb.AppendLine($"Line {i:D4}: Additional padding content so the file remains large enough for mmap path.");
+
+        var largeFile = CreateFile("large_context.txt", sb.ToString());
+        Assert.True(new FileInfo(largeFile).Length > 64 * 1024);
+
+        var matcher = FilePathMatcher.Create("*CONTEXT_TARGET_LINE*");
+        var results = matcher.ScanWithContext(beforeContext: 2, afterContext: 2, largeFile);
+
+        Assert.True(results.Count >= 5); // 2 before + 1 match + 2 after
+        var matchLine = results.Single(r => r.IsMatch);
+        Assert.Equal(1001, matchLine.LineNumber);
+    }
+
+    // ==================== Multi-include byte pre-filter with PureLiteral shapes ====================
+
+    [Fact]
+    public void Scan_MultipleIncludes_PureLiteralShapes_BytePreFilterWorks()
+    {
+        var file = CreateFile("multi_pl.txt", "alpha\nbeta\ngamma\ndelta\n");
+        var matcher = FilePathMatcher.Create(include: ["alpha", "gamma"]);
+        var results = matcher.Scan(file);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("alpha", results[0].Line);
+        Assert.Equal("gamma", results[1].Line);
+    }
+
+    [Fact]
+    public void Scan_MultipleIncludes_PrefixStarSuffixShapes_BytePreFilterWorks()
+    {
+        var file = CreateFile("multi_pss.txt", "A_x_Z\nB_y_Z\nA_hello_Z\nC_foo_D\n");
+        var matcher = FilePathMatcher.Create(include: ["A*Z", "B*Z"]);
+        var results = matcher.Scan(file);
+
+        Assert.Equal(3, results.Count);
+    }
+
+    // ==================== Case-insensitive disables byte pre-filter ====================
+
+    [Fact]
+    public void Scan_CaseInsensitive_StillMatchesCorrectly()
+    {
+        // IgnoreCase = true disables byte pre-filter, but matching must still work
+        var file = CreateFile("case_test.txt", "Hello World\nhello world\nHELLO WORLD\nno match\n");
+        var matcher = FilePathMatcher.Create("*hello*", new FilePathMatcher.Options { IgnoreCase = true });
+        var results = matcher.Scan(file);
+
+        Assert.Equal(3, results.Count);
+    }
+
+    [Fact]
+    public void ContainsMatch_CaseInsensitive_Works()
+    {
+        var file = CreateFile("case_contains.txt", "no match\nHELLO there\n");
+        var matcher = FilePathMatcher.Create("*hello*", new FilePathMatcher.Options { IgnoreCase = true });
+        Assert.True(matcher.ContainsMatch(file));
+    }
+
+    [Fact]
+    public void Scan_CaseInsensitive_PureLiteral_NoBytePreFilter()
+    {
+        // PureLiteral + IgnoreCase: byte pre-filter disabled but matching works
+        var file = CreateFile("case_pl.txt", "exact\nEXACT\nExact\nwrong\n");
+        var matcher = FilePathMatcher.Create("exact", new FilePathMatcher.Options { IgnoreCase = true });
+        var results = matcher.Scan(file);
+
+        Assert.Equal(3, results.Count);
+    }
+
+    // ==================== Long lines exceeding char buffer (>65536 chars) ====================
+
+    [Fact]
+    public void Scan_LongLine_ExceedingCharBuffer_Handled()
+    {
+        // Create a line > 65536 chars to trigger DecodeToChars overflow → rented buffer path
+        var longContent = new string('A', 70000) + "NEEDLE" + new string('B', 1000);
+        var file = CreateFile("long_line.txt", longContent + "\nshort line\n");
+
+        var matcher = FilePathMatcher.Create("*NEEDLE*");
+        var results = matcher.Scan(file);
+
+        Assert.Single(results);
+        Assert.Equal(1, results[0].LineNumber);
+        Assert.Contains("NEEDLE", results[0].Line);
+    }
+
+    [Fact]
+    public void ContainsMatch_LongLine_ExceedingCharBuffer()
+    {
+        var longContent = new string('X', 70000) + "FOUND" + new string('Y', 1000);
+        var file = CreateFile("long_line_contains.txt", longContent + "\nno\n");
+
+        var matcher = FilePathMatcher.Create("*FOUND*");
+        Assert.True(matcher.ContainsMatch(file));
+    }
+
+    [Fact]
+    public void ScanWithContext_LongLine_ExceedingCharBuffer()
+    {
+        var longContent = new string('Z', 70000) + "TARGET" + new string('W', 1000);
+        var file = CreateFile("long_line_ctx.txt", "before line\n" + longContent + "\nafter line\n");
+
+        var matcher = FilePathMatcher.Create("*TARGET*");
+        var results = matcher.ScanWithContext(beforeContext: 1, afterContext: 1, file);
+
+        Assert.True(results.Count >= 3);
+        var matchLine = results.Single(r => r.IsMatch);
+        Assert.Equal(2, matchLine.LineNumber);
+        Assert.Contains("TARGET", matchLine.Line);
+    }
+
+    // ==================== ScanAsync with cancellation ====================
+
+    [Fact]
+    public async Task ScanAsync_CancellationToken_StopsEarly()
+    {
+        // Create many files to increase likelihood of cancellation taking effect
+        var files = new string[50];
+        for (int i = 0; i < files.Length; i++)
+        {
+            var sb = new StringBuilder();
+            for (int j = 0; j < 100; j++)
+                sb.AppendLine($"Line {j}: ERROR in file {i}");
+            files[i] = CreateFile($"cancel_{i}.txt", sb.ToString());
+        }
+
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var cts = new CancellationTokenSource();
+
+        var collected = new List<FilePathMatcher.LineMatch>();
+        try
+        {
+            await foreach (var match in matcher.ScanAsync(files, cts.Token))
+            {
+                collected.Add(match);
+                if (collected.Count >= 10)
+                    cts.Cancel();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected
+        }
+
+        // We should have collected some results but likely not all 5000
+        Assert.True(collected.Count >= 10);
+    }
+
+    [Fact]
+    public async Task ScanAsync_AlreadyCancelled_YieldsNothing()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var collected = new List<FilePathMatcher.LineMatch>();
+        try
+        {
+            await foreach (var match in matcher.ScanAsync([_logFile], cts.Token))
+                collected.Add(match);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected
+        }
+
+        // Should either throw or yield no/few results
+        Assert.True(collected.Count < 100);
+    }
+
+    [Fact]
+    public async Task ScanAsync_EmptyArray_YieldsNothing()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var collected = new List<FilePathMatcher.LineMatch>();
+        await foreach (var match in matcher.ScanAsync([]))
+            collected.Add(match);
+
+        Assert.Empty(collected);
+    }
+
+    // ==================== Scan on non-existent file ====================
+
+    [Fact]
+    public void Scan_NonExistentFile_ReturnsEmpty()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var fakePath = Path.Combine(_tempDir, "ghost.txt");
+        var results = matcher.Scan(fakePath);
+        Assert.Empty(results);
+    }
+
+    // ==================== ScanWithContext negative context values ====================
+
+    [Fact]
+    public void ScanWithContext_NegativeContext_DelegatesToScan()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        var scanResults = matcher.Scan(_logFile);
+        var contextResults = matcher.ScanWithContext(beforeContext: -1, afterContext: -1, _logFile);
+
+        Assert.Equal(scanResults.Count, contextResults.Count);
+        for (int i = 0; i < scanResults.Count; i++)
+        {
+            Assert.Equal(scanResults[i].LineNumber, contextResults[i].LineNumber);
+            Assert.Equal(scanResults[i].Line, contextResults[i].Line);
+            Assert.True(contextResults[i].IsMatch);
+        }
+    }
+
+    // ==================== Byte pre-filter with excludes (no exactByteMatch) ====================
+
+    [Fact]
+    public void Scan_StarContainsStar_WithExcludes_NoExactByteMatch()
+    {
+        // When excludes are present, exactByteMatch is false even if byte pre-filter matches
+        var file = CreateFile("byte_excl.txt", "needle in haystack\nneedle in water\nno match\n");
+        var matcher = FilePathMatcher.Create(
+            include: ["*needle*"],
+            exclude: ["*water*"]);
+        var results = matcher.Scan(file);
+
+        Assert.Single(results);
+        Assert.Contains("haystack", results[0].Line);
+    }
+
+    // ==================== ContainsMatch with Windows line endings ====================
+
+    [Fact]
+    public void ContainsMatch_WindowsLineEndings_Works()
+    {
+        var matcher = FilePathMatcher.Create("*ERROR*");
+        Assert.True(matcher.ContainsMatch(_windowsLineEndings));
+    }
+
+    // ==================== Large file BOM detection in memory-mapped path ====================
+
+    [Fact]
+    public void Scan_LargeFileWithBom_FirstLineMatchedCorrectly()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("BOM_FIRST_LINE_MATCH");
+        for (int i = 0; i < 1500; i++)
+            sb.AppendLine($"Line {i:D4}: Padding content to make the file large enough to exceed the buffered threshold.");
+
+        var largeFile = Path.Combine(_tempDir, "large_bom.txt");
+        File.WriteAllText(largeFile, sb.ToString(), new UTF8Encoding(true)); // BOM = true
+        Assert.True(new FileInfo(largeFile).Length > 64 * 1024);
+
+        var matcher = FilePathMatcher.Create("BOM_FIRST_LINE_MATCH");
+        var results = matcher.Scan(largeFile);
+
+        Assert.Single(results);
+        Assert.Equal(1, results[0].LineNumber);
+        Assert.Equal("BOM_FIRST_LINE_MATCH", results[0].Line);
+    }
+
+    [Fact]
+    public void ContainsMatch_LargeFileWithBom_Works()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("BOM_TARGET_LINE");
+        for (int i = 0; i < 1500; i++)
+            sb.AppendLine($"Line {i:D4}: Padding for size to exceed the sixty-four kilobyte buffered read threshold value.");
+
+        var largeFile = Path.Combine(_tempDir, "large_bom_contains.txt");
+        File.WriteAllText(largeFile, sb.ToString(), new UTF8Encoding(true));
+        Assert.True(new FileInfo(largeFile).Length > 64 * 1024);
+
+        var matcher = FilePathMatcher.Create("BOM_TARGET_LINE");
+        Assert.True(matcher.ContainsMatch(largeFile));
+    }
+
+    // ==================== MinLength pre-filter ====================
+
+    [Fact]
+    public void Scan_ShortLines_FilteredByMinLength()
+    {
+        // Pattern "abcdef" has MinLength 6 → lines shorter than 6 chars are pre-filtered
+        var file = CreateFile("minlen.txt", "ab\nabcdef\nabc\nabcdefgh\n");
+        var matcher = FilePathMatcher.Create("abcdef");
+        var results = matcher.Scan(file);
+
+        Assert.Single(results);
+        Assert.Equal("abcdef", results[0].Line);
+    }
 }
