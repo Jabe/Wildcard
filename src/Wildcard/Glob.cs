@@ -188,11 +188,18 @@ public sealed class Glob
 
         public bool IsIgnored(string fullPath, bool isDirectory)
         {
-            if (!DiscoverGitignore) return false;
+            if (isDirectory)
+            {
+                var name = Path.GetFileName(fullPath.AsSpan());
 
-            // Always skip .git directories — git never lists them in .gitignore
-            if (isDirectory && Path.GetFileName(fullPath.AsSpan()).SequenceEqual(".git"))
-                return true;
+                // Always skip Windows system directories regardless of gitignore settings
+                if (IsSystemDirectory(name))
+                    return true;
+
+                // Always skip .git directories — git never lists them in .gitignore
+                if (DiscoverGitignore && name.SequenceEqual(".git"))
+                    return true;
+            }
 
             if (Filter is null || GitRoot is null) return false;
             var relativePath = Path.GetRelativePath(GitRoot, fullPath).Replace('\\', '/');
@@ -926,13 +933,29 @@ public sealed class Glob
                 options)
             {
                 ShouldIncludePredicate = static (ref FileSystemEntry entry) =>
-                    entry.IsDirectory && (entry.Attributes & FileAttributes.ReparsePoint) == 0,
+                    entry.IsDirectory && (entry.Attributes & FileAttributes.ReparsePoint) == 0
+                    && !IsSystemDirectory(entry.FileName),
                 ShouldRecursePredicate = static (ref FileSystemEntry entry) =>
                     (entry.Attributes & FileAttributes.ReparsePoint) == 0
+                    && !IsSystemDirectory(entry.FileName)
             };
         }
         catch (DirectoryNotFoundException) { return []; }
     }
+
+    private static bool IsSystemDirectory(ReadOnlySpan<char> name) =>
+        // Windows
+        name.Equals("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("$WinREAgent", StringComparison.OrdinalIgnoreCase) ||
+        // macOS (per-volume system directories)
+        name.Equals(".Spotlight-V100", StringComparison.Ordinal) ||
+        name.Equals(".fseventsd", StringComparison.Ordinal) ||
+        name.Equals(".Trashes", StringComparison.Ordinal) ||
+        name.Equals(".TemporaryItems", StringComparison.Ordinal) ||
+        name.Equals(".DocumentRevisions-V100", StringComparison.Ordinal) ||
+        // Linux
+        name.Equals("lost+found", StringComparison.Ordinal);
 
     private static bool ContainsWildcard(string segment)
     {

@@ -674,4 +674,66 @@ public class GlobTests : IDisposable
 
         Assert.Equal(sequential, parallel);
     }
+
+    // --- System directory skipping ---
+
+    [Theory]
+    [InlineData("$RECYCLE.BIN")]
+    [InlineData("System Volume Information")]
+    [InlineData("$WinREAgent")]
+    [InlineData(".Spotlight-V100")]
+    [InlineData(".fseventsd")]
+    [InlineData(".Trashes")]
+    [InlineData(".TemporaryItems")]
+    [InlineData(".DocumentRevisions-V100")]
+    [InlineData("lost+found")]
+    public void SystemDirectories_SkippedDuringTraversal(string systemDir)
+    {
+        // Create a file inside a system directory
+        CreateFile($"{systemDir}/secret.txt");
+
+        var results = Glob("**/*.txt");
+
+        Assert.DoesNotContain(results, r => r.StartsWith(systemDir, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("root.txt", results);
+    }
+
+    [Theory]
+    [InlineData("$RECYCLE.BIN")]
+    [InlineData("System Volume Information")]
+    [InlineData("$WinREAgent")]
+    [InlineData(".Spotlight-V100")]
+    [InlineData(".fseventsd")]
+    [InlineData(".Trashes")]
+    [InlineData(".TemporaryItems")]
+    [InlineData(".DocumentRevisions-V100")]
+    [InlineData("lost+found")]
+    public void SystemDirectories_SkippedDuringTraversal_Parallel(string systemDir)
+    {
+        // Verify the parallel (channel-based) path also skips system directories
+        CreateFile($"{systemDir}/deep/nested/file.cs");
+
+        var results = Wildcard.Glob.Match("**/*.cs", _tempDir)
+            .Select(p => Path.GetRelativePath(_tempDir, p).Replace('\\', '/'))
+            .ToList();
+
+        Assert.DoesNotContain(results, r => r.StartsWith(systemDir, StringComparison.OrdinalIgnoreCase));
+        // Normal files still found
+        Assert.Contains(results, r => r == "src/Program.cs");
+    }
+
+    [Fact]
+    public void SystemDirectories_SimilarNamesNotSkipped()
+    {
+        // Directories with similar but non-matching names should NOT be skipped
+        CreateFile("Trashes/file.txt");
+        CreateFile("spotlight/file.txt");
+        CreateFile("recycle/file.txt");
+
+        var results = Glob("**/*.txt");
+
+        Assert.Contains("Trashes/file.txt", results);
+        Assert.Contains("spotlight/file.txt", results);
+        Assert.Contains("recycle/file.txt", results);
+    }
 }
