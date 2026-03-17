@@ -355,6 +355,34 @@ public sealed class WildcardPattern
         return new Regex(sb.ToString(), options);
     }
 
+    /// <summary>
+    /// Converts this wildcard pattern into a <see cref="PatternPredicate"/> that describes
+    /// the match operation structurally (e.g. starts-with, contains, exact).
+    /// Useful for translating patterns to SQL LIKE clauses or other query languages.
+    /// Complex patterns that cannot be simplified are returned as <see cref="PatternPredicate.Regex"/>.
+    /// </summary>
+    public PatternPredicate ToPredicate()
+    {
+        if (_segments.Length == 0)
+            return new PatternPredicate.Exact("", _ignoreCase);
+
+        return _shape switch
+        {
+            PatternShape.PureLiteral      => new PatternPredicate.Exact(_prefix!, _ignoreCase),
+            PatternShape.PrefixStar       => new PatternPredicate.StartsWith(_prefix!, _ignoreCase),
+            PatternShape.StarSuffix       => new PatternPredicate.EndsWith(_suffix!, _ignoreCase),
+            PatternShape.StarContainsStar => new PatternPredicate.Contains(_prefix!, _ignoreCase),
+            PatternShape.PrefixStarSuffix => new PatternPredicate.StartsAndEndsWith(_prefix!, _suffix!, _ignoreCase),
+            _                             => new PatternPredicate.Regex(ToRegex().ToString(), _ignoreCase),
+        };
+    }
+
+    /// <summary>
+    /// Compiles a pattern and returns its <see cref="PatternPredicate"/> in one step.
+    /// </summary>
+    public static PatternPredicate ToPredicate(string pattern, bool ignoreCase = false)
+        => Compile(pattern, ignoreCase).ToPredicate();
+
     // --- Core matching engine using backtracking with optimized fast-paths ---
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
