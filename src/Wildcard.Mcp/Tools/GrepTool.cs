@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Threading.Channels;
 using ModelContextProtocol.Server;
@@ -27,6 +27,23 @@ public static class GrepTool
         [Description("Return match counts per file instead of line content (default: false)")] bool count = false,
         CancellationToken cancellationToken = default)
     {
+        var summary = ArgSummary.Create()
+            .Arg("pattern", pattern)
+            .Arg("content_patterns", content_patterns)
+            .Arg("base_directory", base_directory)
+            .Arg("exclude_patterns", exclude_patterns)
+            .Arg("exclude_paths", exclude_paths)
+            .Arg("ignore_case", ignore_case, false)
+            .Arg("files_only", files_only, false)
+            .Arg("respect_gitignore", respect_gitignore, true)
+            .Arg("follow_symlinks", follow_symlinks, false)
+            .Arg("limit", limit, 500)
+            .Arg("before_context", before_context, 0)
+            .Arg("after_context", after_context, 0)
+            .Arg("context", context, 0)
+            .Arg("count", count, false)
+            .ToString();
+
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var globOptions = new GlobOptions
         {
@@ -48,18 +65,18 @@ public static class GrepTool
             options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
 
         if (count)
-            return await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only, cancellationToken), cancellationToken);
+            return summary + await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only, cancellationToken), cancellationToken);
 
         if (files_only)
-            return await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
+            return summary + await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
 
         int resolvedBefore = before_context > 0 ? before_context : context;
         int resolvedAfter = after_context > 0 ? after_context : context;
 
         if (resolvedBefore > 0 || resolvedAfter > 0)
-            return await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter, cancellationToken), cancellationToken);
+            return summary + await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter, cancellationToken), cancellationToken);
 
-        return await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
+        return summary + await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
     }
 
     private static string RunFilesOnly(string pattern, string baseDir, GlobOptions globOptions,

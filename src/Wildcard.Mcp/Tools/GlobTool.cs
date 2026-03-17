@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Threading.Channels;
 using ModelContextProtocol.Server;
@@ -20,6 +20,16 @@ public static class GlobTool
         [Description("Return only the count of matching files, not the file paths (default: false)")] bool count = false,
         CancellationToken cancellationToken = default)
     {
+        var summary = ArgSummary.Create()
+            .Arg("pattern", pattern)
+            .Arg("base_directory", base_directory)
+            .Arg("exclude_paths", exclude_paths)
+            .Arg("respect_gitignore", respect_gitignore, true)
+            .Arg("follow_symlinks", follow_symlinks, false)
+            .Arg("limit", limit, 10000)
+            .Arg("count", count, false)
+            .ToString();
+
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var options = new GlobOptions
         {
@@ -63,16 +73,16 @@ public static class GlobTool
         await producer;
 
         if (matched == 0)
-            return "No files found.";
+            return summary + "No files found.";
 
         if (count)
-            return $"{matched} file{(matched > 1 ? "s" : "")} found.";
+            return summary + $"{matched} file{(matched > 1 ? "s" : "")} found.";
 
         if (matched > limit)
             sb.AppendLine($"\n... and {matched - limit} more files ({matched} total, showing first {limit})");
         else
             sb.AppendLine($"\n{matched} files found.");
 
-        return sb.ToString();
+        return summary + sb.ToString();
     }
 }

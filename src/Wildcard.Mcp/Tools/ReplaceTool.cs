@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Threading.Channels;
 using ModelContextProtocol.Server;
@@ -23,6 +23,19 @@ public static class ReplaceTool
         [Description("Maximum number of files to process (default: 50)")] int limit = 50,
         CancellationToken cancellationToken = default)
     {
+        var summary = ArgSummary.Create()
+            .Arg("pattern", pattern)
+            .Arg("find", find)
+            .Arg("replace", replace)
+            .Arg("base_directory", base_directory)
+            .Arg("exclude_paths", exclude_paths)
+            .Arg("ignore_case", ignore_case, false)
+            .Arg("respect_gitignore", respect_gitignore, true)
+            .Arg("follow_symlinks", follow_symlinks, false)
+            .Arg("dry_run", dry_run, true)
+            .Arg("limit", limit, 50)
+            .ToString();
+
         var baseDir = base_directory ?? Directory.GetCurrentDirectory();
         var globOptions = new GlobOptions
         {
@@ -31,9 +44,9 @@ public static class ReplaceTool
         };
 
         if (string.IsNullOrEmpty(find))
-            return "Error: find string cannot be empty.";
+            return summary + "Error: find string cannot be empty.";
 
-        return await Task.Run(() =>
+        return summary + await Task.Run(() =>
         {
             // Normalize find pattern for file matching (auto-wrap plain words as *word*)
             var normalizedFind = NormalizeContentPattern(find);
