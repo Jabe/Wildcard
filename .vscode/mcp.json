@@ -1,0 +1,15 @@
+{
+    "servers": {
+        "wildcard": {
+            "type": "stdio",
+            "command": "dotnet",
+            "args": [
+                "run",
+                "--project",
+                "${workspaceFolder}/src/Wildcard.Mcp",
+                "--",
+                "--live"
+            ]
+        }
+    }
+}
