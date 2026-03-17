@@ -1429,7 +1429,7 @@ public class GlobTests : IDisposable
     }
 
     [Fact]
-    public void WriteBlocking_BoundedChannel()
+    public async Task WriteBlocking_BoundedChannel()
     {
         // Test WriteBlocking with a bounded channel (exercises slow path when full)
         var channel = System.Threading.Channels.Channel.CreateBounded<string>(1);
@@ -1443,7 +1443,7 @@ public class GlobTests : IDisposable
         Assert.Equal("first", first);
 
         // The background write should complete
-        writeTask.Wait(TimeSpan.FromSeconds(5));
+        await writeTask.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(channel.Reader.TryRead(out var second));
         Assert.Equal("second", second);
     }
