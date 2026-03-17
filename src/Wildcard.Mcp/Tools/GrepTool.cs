@@ -25,9 +25,12 @@ public static class GrepTool
         [Description("Lines to show after each match (default: 0)")] int after_context = 0,
         [Description("Lines to show before and after each match — shorthand for before_context + after_context (default: 0)")] int context = 0,
         [Description("Return match counts per file instead of line content (default: false)")] bool count = false,
+        WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create()
+        var summary = ArgSummary.Create();
+        if (index is not null) summary.Live(index.FileCount);
+        summary
             .Arg("pattern", pattern)
             .Arg("content_patterns", content_patterns)
             .Arg("base_directory", base_directory)
@@ -65,23 +68,68 @@ public static class GrepTool
             exclude: normalizedExcludes,
             options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
 
+        // Use index when available and options match indexed state
+        var activeIndex = index is not null && respect_gitignore && !follow_symlinks ? index : null;
+
         if (count)
-            return summary + await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only, cancellationToken), cancellationToken);
+            return summary + await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, files_only, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
         if (files_only)
-            return summary + await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
+            return summary + await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
         int resolvedBefore = before_context > 0 ? before_context : context;
         int resolvedAfter = after_context > 0 ? after_context : context;
 
         if (resolvedBefore > 0 || resolvedAfter > 0)
-            return summary + await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter, cancellationToken), cancellationToken);
+            return summary + await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, resolvedBefore, resolvedAfter, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
-        return summary + await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, cancellationToken), cancellationToken);
+        return summary + await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, excludePathPatterns, limit, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates a file producer task that writes matching file paths to the channel.
+    /// Uses the in-memory index when available, otherwise falls back to disk enumeration.
+    /// </summary>
+    private static Task StartFileProducer(Channel<string> channel, string pattern, string baseDir,
+        GlobOptions globOptions, WildcardPattern[]? excludePathPatterns,
+        WorkspaceIndex? index, string[]? excludePathStrings,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(() =>
+        {
+            try
+            {
+                if (index is not null)
+                {
+                    foreach (var file in index.MatchGlob(pattern, baseDir, excludePathStrings))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Wildcard.Glob.WriteBlocking(channel.Writer, file);
+                    }
+                }
+                else if (excludePathPatterns is not null)
+                {
+                    foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+                        if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                        Wildcard.Glob.WriteBlocking(channel.Writer, file);
+                    }
+                }
+                else
+                {
+                    var glob = Wildcard.Glob.Parse(pattern);
+                    glob.WriteMatchesToChannel(channel.Writer, baseDir, globOptions, cancellationToken);
+                }
+            }
+            finally { channel.Writer.Complete(); }
+        }, cancellationToken);
     }
 
     private static string RunFilesOnly(string pattern, string baseDir, GlobOptions globOptions,
         FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
+        WorkspaceIndex? index, string[]? excludePathStrings,
         CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
@@ -92,22 +140,15 @@ public static class GrepTool
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
 
-        var producer = Task.Run(() =>
-        {
-            try
-            {
-                var glob = Wildcard.Glob.Parse(pattern);
-                glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
-            }
-            finally { fileChannel.Writer.Complete(); }
-        }, cancellationToken);
+        var producer = StartFileProducer(fileChannel, pattern, baseDir, globOptions,
+            excludePathPatterns, index, excludePathStrings, cancellationToken);
 
         var outputLock = new object();
         var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
         Parallel.ForEach(fileChannel.Reader.ReadAllAsync().ToBlockingEnumerable(), parallelOpts, file =>
         {
             var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
-            if (IsPathExcluded(relPath, excludePathPatterns)) return;
+            if (index is null && IsPathExcluded(relPath, excludePathPatterns)) return;
             if (!matcher.ContainsMatch(file)) return;
 
             lock (outputLock)
@@ -133,6 +174,7 @@ public static class GrepTool
 
     private static string RunContentSearch(string pattern, string baseDir, GlobOptions globOptions,
         FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
+        WorkspaceIndex? index, string[]? excludePathStrings,
         CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
@@ -144,28 +186,8 @@ public static class GrepTool
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
 
-        var producer = Task.Run(() =>
-        {
-            try
-            {
-                if (excludePathPatterns is not null)
-                {
-                    foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
-                        if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-                        Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
-                    }
-                }
-                else
-                {
-                    var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
-                }
-            }
-            finally { fileChannel.Writer.Complete(); }
-        }, cancellationToken);
+        var producer = StartFileProducer(fileChannel, pattern, baseDir, globOptions,
+            excludePathPatterns, index, excludePathStrings, cancellationToken);
 
         var outputLock = new object();
         var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
@@ -230,7 +252,9 @@ public static class GrepTool
 
     private static string RunContentSearchWithContext(string pattern, string baseDir, GlobOptions globOptions,
         FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit,
-        int beforeContext, int afterContext, CancellationToken cancellationToken = default)
+        int beforeContext, int afterContext,
+        WorkspaceIndex? index, string[]? excludePathStrings,
+        CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
         int matchCount = 0;
@@ -241,28 +265,8 @@ public static class GrepTool
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
 
-        var producer = Task.Run(() =>
-        {
-            try
-            {
-                if (excludePathPatterns is not null)
-                {
-                    foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
-                        if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-                        Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
-                    }
-                }
-                else
-                {
-                    var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
-                }
-            }
-            finally { fileChannel.Writer.Complete(); }
-        }, cancellationToken);
+        var producer = StartFileProducer(fileChannel, pattern, baseDir, globOptions,
+            excludePathPatterns, index, excludePathStrings, cancellationToken);
 
         var outputLock = new object();
         var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
@@ -343,6 +347,7 @@ public static class GrepTool
 
     private static string RunCountSearch(string pattern, string baseDir, GlobOptions globOptions,
         FilePathMatcher matcher, WildcardPattern[]? excludePathPatterns, int limit, bool summaryOnly,
+        WorkspaceIndex? index, string[]? excludePathStrings,
         CancellationToken cancellationToken = default)
     {
         var sb = new StringBuilder();
@@ -354,28 +359,8 @@ public static class GrepTool
             SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait,
         });
 
-        var producer = Task.Run(() =>
-        {
-            try
-            {
-                if (excludePathPatterns is not null)
-                {
-                    foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
-                        if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-                        Wildcard.Glob.WriteBlocking(fileChannel.Writer, file);
-                    }
-                }
-                else
-                {
-                    var glob = Wildcard.Glob.Parse(pattern);
-                    glob.WriteMatchesToChannel(fileChannel.Writer, baseDir, globOptions, cancellationToken);
-                }
-            }
-            finally { fileChannel.Writer.Complete(); }
-        }, cancellationToken);
+        var producer = StartFileProducer(fileChannel, pattern, baseDir, globOptions,
+            excludePathPatterns, index, excludePathStrings, cancellationToken);
 
         var outputLock = new object();
         var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };

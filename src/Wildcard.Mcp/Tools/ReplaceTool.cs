@@ -21,9 +21,12 @@ public static class ReplaceTool
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
         [Description("Preview only, don't write changes (default: true)")] bool dry_run = true,
         [Description("Maximum number of files to process (default: 50)")] int limit = 50,
+        WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create()
+        var summary = ArgSummary.Create();
+        if (index is not null) summary.Live(index.FileCount);
+        summary
             .Arg("pattern", pattern)
             .Arg("find", find)
             .Arg("replace", replace)
@@ -60,16 +63,33 @@ public static class ReplaceTool
                 include: [normalizedFind],
                 options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
 
+            // Use index when available and options match indexed state
+            var activeIndex = index is not null && respect_gitignore && !follow_symlinks ? index : null;
+
             // Find files with matches
             var matchingFiles = new List<string>();
-            foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+
+            if (activeIndex is not null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (matchingFiles.Count >= limit) break;
-                var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
-                if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-                if (matcher.ContainsMatch(file))
-                    matchingFiles.Add(file);
+                foreach (var file in activeIndex.MatchGlob(pattern, baseDir, exclude_paths))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (matchingFiles.Count >= limit) break;
+                    if (matcher.ContainsMatch(file))
+                        matchingFiles.Add(file);
+                }
+            }
+            else
+            {
+                foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (matchingFiles.Count >= limit) break;
+                    var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+                    if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                    if (matcher.ContainsMatch(file))
+                        matchingFiles.Add(file);
+                }
             }
 
             if (matchingFiles.Count == 0)
@@ -79,6 +99,16 @@ public static class ReplaceTool
             var results = dry_run
                 ? FileReplacer.Preview(matchingFiles.ToArray(), find, replace, ignore_case)
                 : FileReplacer.Apply(matchingFiles.ToArray(), find, replace, ignore_case);
+
+            // Proactively update index after writes
+            if (!dry_run && index is not null)
+            {
+                foreach (var result in results)
+                {
+                    if (result.Error is null && result.Replacements.Count > 0)
+                        index.NotifyFileWritten(result.FilePath);
+                }
+            }
 
             if (results.Count == 0)
                 return "No replacements found.";

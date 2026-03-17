@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Wildcard\Wildcard.csproj" />
+    <ProjectReference Include="..\..\src\Wildcard.Mcp\Wildcard.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

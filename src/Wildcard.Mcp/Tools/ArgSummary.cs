@@ -11,6 +11,13 @@ internal sealed class ArgSummary
 
     public static ArgSummary Create() => new();
 
+    public ArgSummary Live(int fileCount)
+    {
+        Append("mode");
+        _sb.Append($"\u26A1 live ({fileCount} files)");
+        return this;
+    }
+
     public ArgSummary Arg(string name, string? value)
     {
         if (value is null) return this;

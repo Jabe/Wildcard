@@ -18,9 +18,12 @@ public static class GlobTool
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
         [Description("Maximum number of results to return (default: 10000)")] int limit = 10000,
         [Description("Return only the count of matching files, not the file paths (default: false)")] bool count = false,
+        WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create()
+        var summary = ArgSummary.Create();
+        if (index is not null) summary.Live(index.FileCount);
+        summary
             .Arg("pattern", pattern)
             .Arg("base_directory", base_directory)
             .Arg("exclude_paths", exclude_paths)
@@ -32,6 +35,33 @@ public static class GlobTool
 
         var (baseDir, guardError) = PathGuard.Resolve(base_directory);
         if (guardError is not null) return summary + guardError;
+
+        // Use index when available and options match indexed state
+        if (index is not null && respect_gitignore && !follow_symlinks)
+        {
+            var sb = new StringBuilder();
+            int matched = 0;
+
+            foreach (var file in index.MatchGlob(pattern, baseDir, exclude_paths))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                matched++;
+                if (!count && matched <= limit)
+                    sb.AppendLine(Path.GetRelativePath(baseDir, file).Replace('\\', '/'));
+            }
+
+            if (matched == 0)
+                return summary + "No files found.";
+            if (count)
+                return summary + $"{matched} file{(matched > 1 ? "s" : "")} found.";
+            if (matched > limit)
+                sb.AppendLine($"\n... and {matched - limit} more files ({matched} total, showing first {limit})");
+            else
+                sb.AppendLine($"\n{matched} files found.");
+
+            return summary + sb.ToString();
+        }
+
         var options = new GlobOptions
         {
             RespectGitignore = respect_gitignore,
@@ -49,8 +79,8 @@ public static class GlobTool
             finally { channel.Writer.TryComplete(); }
         }, cancellationToken);
 
-        var sb = new StringBuilder();
-        int matched = 0;
+        var sb2 = new StringBuilder();
+        int matched2 = 0;
 
         await foreach (var file in channel.Reader.ReadAllAsync(cancellationToken))
         {
@@ -66,24 +96,24 @@ public static class GlobTool
                 if (excluded) continue;
             }
 
-            matched++;
-            if (!count && matched <= limit)
-                sb.AppendLine(relPath);
+            matched2++;
+            if (!count && matched2 <= limit)
+                sb2.AppendLine(relPath);
         }
 
         await producer;
 
-        if (matched == 0)
+        if (matched2 == 0)
             return summary + "No files found.";
 
         if (count)
-            return summary + $"{matched} file{(matched > 1 ? "s" : "")} found.";
+            return summary + $"{matched2} file{(matched2 > 1 ? "s" : "")} found.";
 
-        if (matched > limit)
-            sb.AppendLine($"\n... and {matched - limit} more files ({matched} total, showing first {limit})");
+        if (matched2 > limit)
+            sb2.AppendLine($"\n... and {matched2 - limit} more files ({matched2} total, showing first {limit})");
         else
-            sb.AppendLine($"\n{matched} files found.");
+            sb2.AppendLine($"\n{matched2} files found.");
 
-        return summary + sb.ToString();
+        return summary + sb2.ToString();
     }
 }
