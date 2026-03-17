@@ -100,7 +100,7 @@ public static class GrepTool
             }
         });
 
-        producer.Wait();
+        producer.GetAwaiter().GetResult();
 
         if (count == 0)
             return "No matching files found.";
@@ -199,7 +199,7 @@ public static class GrepTool
             }
         });
 
-        producer.Wait();
+        producer.GetAwaiter().GetResult();
 
         if (!anyOutput)
             return "No matches found.";
@@ -312,7 +312,7 @@ public static class GrepTool
             }
         });
 
-        producer.Wait();
+        producer.GetAwaiter().GetResult();
 
         if (!anyOutput)
             return "No matches found.";
@@ -377,7 +377,7 @@ public static class GrepTool
             }
         });
 
-        producer.Wait();
+        producer.GetAwaiter().GetResult();
 
         if (totalMatches == 0)
             return "No matches found.";
