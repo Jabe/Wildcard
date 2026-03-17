@@ -36,7 +36,8 @@ public static class ReplaceTool
             .Arg("limit", limit, 50)
             .ToString();
 
-        var baseDir = base_directory ?? Directory.GetCurrentDirectory();
+        var (baseDir, guardError) = PathGuard.Resolve(base_directory);
+        if (guardError is not null) return summary + guardError;
         var globOptions = new GlobOptions
         {
             RespectGitignore = respect_gitignore,

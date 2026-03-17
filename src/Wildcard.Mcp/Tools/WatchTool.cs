@@ -26,7 +26,8 @@ public static class WatchTool
             .Arg("respect_gitignore", respect_gitignore, true)
             .ToString();
 
-        var baseDir = base_directory ?? Directory.GetCurrentDirectory();
+        var (baseDir, guardError) = PathGuard.Resolve(base_directory);
+        if (guardError is not null) return summary + guardError;
         duration_seconds = Math.Clamp(duration_seconds, 1, 120);
 
         var watchBaseDir = GlobHelper.GetWatchBaseDirectory(pattern, baseDir);
