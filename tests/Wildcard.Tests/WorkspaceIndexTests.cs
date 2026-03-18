@@ -18,6 +18,17 @@ public class WorkspaceIndexTests : IDisposable
         catch { /* best effort cleanup */ }
     }
 
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                Assert.Fail("Timed out waiting for condition");
+            await Task.Delay(100);
+        }
+    }
+
     private void CreateFile(string relativePath, string content = "")
     {
         var fullPath = Path.Combine(_tempDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -157,7 +168,7 @@ public class WorkspaceIndexTests : IDisposable
 
         // Create a new file and wait for FSW + debounce
         CreateFile("b.txt", "new file");
-        await Task.Delay(500);
+        await WaitUntilAsync(() => index.MatchGlob("**/*", _tempDir, null).Count() == 2, TimeSpan.FromSeconds(5));
 
         Assert.Equal(2, index.MatchGlob("**/*", _tempDir, null).Count());
     }
@@ -174,7 +185,7 @@ public class WorkspaceIndexTests : IDisposable
         Assert.Equal(2, index.MatchGlob("**/*", _tempDir, null).Count());
 
         File.Delete(Path.Combine(_tempDir, "b.txt"));
-        await Task.Delay(500);
+        await WaitUntilAsync(() => index.MatchGlob("**/*", _tempDir, null).Count() == 1, TimeSpan.FromSeconds(5));
 
         Assert.Single(index.MatchGlob("**/*", _tempDir, null).ToList());
     }
@@ -190,7 +201,7 @@ public class WorkspaceIndexTests : IDisposable
         var oldPath = Path.Combine(_tempDir, "old.txt");
         var newPath = Path.Combine(_tempDir, "new.txt");
         File.Move(oldPath, newPath);
-        await Task.Delay(500);
+        await WaitUntilAsync(() => index.MatchGlob("**/*", _tempDir, null).Any(f => f.Contains("new.txt")), TimeSpan.FromSeconds(5));
 
         var files = index.MatchGlob("**/*", _tempDir, null).ToList();
         Assert.Single(files);
