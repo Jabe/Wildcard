@@ -18,11 +18,16 @@
     <RepositoryUrl>https://github.com/Jabe/Wildcard</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>grep;glob;wildcard;search;cli;tool</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(PublishAot)' == 'true'">
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Wildcard\Wildcard.csproj" />
