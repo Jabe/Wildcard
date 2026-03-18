@@ -1,6 +1,6 @@
 # Wildcard
 
-A high-performance .NET 10 library for wildcard pattern matching. Provides a lightweight alternative to the full Regex engine, optimized for speed and zero allocations on the hot path.
+A high-performance .NET 10 toolkit for wildcard pattern matching, file system globbing, and content search. Zero allocations on the hot path, memory-mapped file scanning, and a CLI grep tool (`wcg`) that gets within 19% of ripgrep. Ships with an MCP server that gives AI coding agents fast, directory-restricted file search and replace.
 
 ## Requirements
 
@@ -60,6 +60,11 @@ string? first = files.FirstMatch(WildcardPattern.Compile("*.md")); // "readme.md
 Regex regex = WildcardPattern.Compile("*.csv").ToRegex();
 // regex.ToString() == "^.*\\.csv$"
 
+// Convert to a Func<string, bool> predicate
+PatternPredicate predicate = WildcardPattern.ToPredicate("*.cs");
+predicate("app.cs");   // true
+predicate("readme.md"); // false
+
 // Bulk filtering
 var pattern = WildcardPattern.Compile("*.cs");
 List<string> csharpFiles = WildcardSearch.FilterLines(pattern, files);
@@ -93,8 +98,11 @@ var matcher = FilePathMatcher.Create(
 );
 var matches = matcher.Scan("app.log");
 
-// Async streaming — results arrive as they are found
+// Quick boolean check — does a file contain any match?
 var matcher = FilePathMatcher.Create("*timeout*");
+bool hasTimeout = matcher.ContainsMatch("app.log");
+
+// Async streaming — results arrive as they are found
 await foreach (var match in matcher.ScanAsync(filePaths))
     Console.WriteLine(match.Line);
 
@@ -134,6 +142,9 @@ var withSymlinks = Glob.Match("**/*.cs", options: new GlobOptions { FollowSymlin
 var glob = Glob.Parse("**/*.json");
 foreach (var file in glob.EnumerateMatches("/my/project"))
     Console.WriteLine(file);
+
+// Path matching without touching the filesystem
+Glob.IsMatch("src/**/*.cs", "src/Models/User.cs"); // true
 ```
 
 ### Find and Replace
@@ -258,6 +269,60 @@ wcg "**/*.cs" ERROR --replace WARNING -i             # Case-insensitive replace
 # Capture-group replacement (wildcards in find, $1/$2 in replace):
 wcg "**/*.cs" "*console.log(*)*" -r '$1logger.info($2)$3'  # Refactor method calls
 ```
+
+### MCP Server — `wildcard-mcp`
+
+An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that exposes Wildcard's capabilities as tools for AI coding assistants (Copilot, Claude, Cursor, etc.).
+
+#### Tools
+
+| Tool | Description |
+|------|-------------|
+| `wildcard_glob` | Find files by glob pattern — respects `.gitignore`, supports count mode |
+| `wildcard_grep` | Search file contents with context lines, count mode, and parallel memory-mapped I/O |
+| `wildcard_replace` | Find-and-replace across files — dry-run preview by default, atomic writes, capture groups |
+| `wildcard_watch` | Watch for file changes matching a glob pattern for a bounded duration |
+
+#### Install
+
+```bash
+dotnet tool install -g wildcard-mcp
+```
+
+#### VS Code / Copilot
+
+Add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "wildcard": {
+      "type": "stdio",
+      "command": "wildcard-mcp",
+      "args": ["--live"]
+    }
+  }
+}
+```
+
+#### Claude Code
+
+Add to `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "wildcard": {
+      "command": "wildcard-mcp",
+      "args": ["--live"]
+    }
+  }
+}
+```
+
+The server communicates over stdio and auto-discovers all four tools. All operations are **restricted to the working directory** — path traversal outside the project root is rejected by a guard that normalizes and validates every path before any file I/O.
+
+Pass `--live` to enable live mode: the server builds an in-memory index of all files at startup and keeps it current via filesystem watcher. Glob queries become an in-memory filter instead of a disk walk, which dramatically speeds up repeated searches on large codebases.
 
 ## Benchmarks
 
