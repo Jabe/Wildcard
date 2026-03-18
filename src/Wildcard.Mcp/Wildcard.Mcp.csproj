@@ -18,7 +18,12 @@
     <RepositoryUrl>https://github.com/Jabe/Wildcard</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>mcp;grep;glob;wildcard;search;ai;tools</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Wildcard\Wildcard.csproj" />

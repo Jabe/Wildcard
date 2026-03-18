@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "wildcard": {
-      "command": "dotnet",
-      "args": ["run", "--no-build", "--project", "/Users/jan.berdel/Code/open-source/Wildcard/src/Wildcard.Mcp", "--", "--live"]
+      "command": "wildcard-mcp",
+      "args": ["--live"]
     }
   }
 }
