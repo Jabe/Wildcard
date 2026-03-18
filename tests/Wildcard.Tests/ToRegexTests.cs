@@ -172,8 +172,8 @@ public class ToRegexTests
     public void Brace_RegexActuallyMatches()
     {
         var regex = WildcardPattern.Compile("*.{cs,fs}").ToRegex();
-        Assert.True(regex.IsMatch("file.cs"));
-        Assert.True(regex.IsMatch("file.fs"));
-        Assert.False(regex.IsMatch("file.vb"));
+        Assert.Matches(regex, "file.cs");
+        Assert.Matches(regex, "file.fs");
+        Assert.DoesNotMatch(regex, "file.vb");
     }
 }
