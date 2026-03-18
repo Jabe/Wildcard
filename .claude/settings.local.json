@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git show:*)",
+      "mcp__wildcard__wildcard_glob",
+      "mcp__wildcard__wildcard_grep",
+      "mcp__wildcard__wildcard_watch",
+      "mcp__wildcard__wildcard_replace"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "wildcard"
+  ],
+  "enableAllProjectMcpServers": true
+}

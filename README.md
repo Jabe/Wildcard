@@ -16,13 +16,13 @@ A high-performance .NET 10 library for wildcard pattern matching. Provides a lig
 | `[a-z]` | Matches any character in the range |
 | `[!x]` or `[^x]` | Matches any character NOT in the set |
 | `\` | Escapes the next character (e.g. `\*` matches a literal `*`) |
+| `{a,b,c}` | Brace expansion — matches any of the comma-separated alternatives |
 
 ### Glob-only Syntax
 
 | Token | Description |
 |-------|-------------|
 | `**` | Matches zero or more directory levels (recursive) |
-| `{a,b,c}` | Brace expansion — matches any of the comma-separated alternatives |
 
 ## Usage
 
@@ -37,6 +37,11 @@ pattern.IsMatch("fileAB.log"); // false
 
 // Case-insensitive matching
 WildcardPattern.IsMatch("HELLO", "hello", ignoreCase: true); // true
+
+// Brace alternation — match any of the comma-separated alternatives
+WildcardPattern.IsMatch("*.{cs,fs,vb}", "program.cs");       // true
+WildcardPattern.IsMatch("{error,warn}*", "error: timeout");   // true
+WildcardPattern.IsMatch("{get,set}_{name,value}", "get_name");// true
 
 // TryMatch — extract what each * captured
 var p = WildcardPattern.Compile("\\[*\\] * - *");
@@ -236,6 +241,10 @@ wcg "**/*.log" "HTTP [45]??"            # HTTP 4xx or 5xx — [45] + two ?? digi
 wcg "**/*.log" "[EIWD]*"                # Lines starting with E, I, W or D (ERROR/INFO/WARN/DEBUG)
 wcg "**/*.log" "[!D]*"                  # Lines not starting with D (excludes DEBUG)
 
+# Brace alternation in content patterns:
+wcg "**/*.log" "{ERROR,WARN}*"          # Lines starting with ERROR or WARN
+wcg "**/*.cs" "{TODO,FIXME,HACK}*"      # Lines starting with any of those markers
+
 # Count mode:
 wcg "**/*.cs" TODO -c                   # Per-file match counts + summary
 wcg "**/*.cs" TODO -c -l                # Summary only (total matches and files)
@@ -328,6 +337,8 @@ Real-world content search on `~/Code` (~130k files across multiple git repos). A
 - **CharClass** — a character set like `[a-z]`, optionally negated, using `SearchValues<char>` for SIMD-accelerated lookups
 
 Consecutive `*` characters are collapsed into a single Star segment during compilation. Single-character, non-negated character classes (e.g. `[[]`) are promoted to Literal segments and merged with adjacent literals.
+
+**Brace expansion** — patterns containing `{a,b,c}` are expanded by `BraceExpander` into multiple alternative patterns before compilation. For example, `*.{cs,fs}` becomes `["*.cs", "*.fs"]`. Each alternative is compiled independently and stored as a `WildcardPattern[]`. Matching succeeds if any alternative matches. Patterns without braces skip this step entirely (zero overhead).
 
 ### 2. Pattern Shape Specialization
 

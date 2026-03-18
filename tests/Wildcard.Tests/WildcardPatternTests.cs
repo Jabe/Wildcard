@@ -382,6 +382,95 @@ public class WildcardPatternTests
         Assert.False(p.IsMatch("abcb"));
     }
 
+    // ── Brace alternation {a,b,c} ──
+
+    [Theory]
+    [InlineData("{a,b,c}", "a")]
+    [InlineData("{a,b,c}", "b")]
+    [InlineData("{a,b,c}", "c")]
+    [InlineData("*.{cs,fs,vb}", "file.cs")]
+    [InlineData("*.{cs,fs,vb}", "file.fs")]
+    [InlineData("*.{cs,fs,vb}", "file.vb")]
+    [InlineData("{error,warn}*", "error: timeout")]
+    [InlineData("{error,warn}*", "warning")]
+    [InlineData("{get,set}_{name,value}", "get_name")]
+    [InlineData("{get,set}_{name,value}", "set_value")]
+    [InlineData("{get,set}_{name,value}", "get_value")]
+    [InlineData("{get,set}_{name,value}", "set_name")]
+    [InlineData("{a,{b,c}}", "a")]
+    [InlineData("{a,{b,c}}", "b")]
+    [InlineData("{a,{b,c}}", "c")]
+    [InlineData("{cs}", "cs")]
+    [InlineData("{a,}", "a")]
+    [InlineData("{a,}", "")]
+    public void Brace_Matches(string pattern, string input) =>
+        Assert.True(WildcardPattern.IsMatch(pattern, input));
+
+    [Theory]
+    [InlineData("{a,b,c}", "d")]
+    [InlineData("{a,b,c}", "ab")]
+    [InlineData("*.{cs,fs,vb}", "file.txt")]
+    [InlineData("{error,warn}*", "info: ok")]
+    [InlineData("{get,set}_{name,value}", "delete_name")]
+    public void Brace_Rejects(string pattern, string input) =>
+        Assert.False(WildcardPattern.IsMatch(pattern, input));
+
+    [Fact]
+    public void Brace_EscapedBrace_NoExpansion()
+    {
+        // Escaped opening brace — treated as literal
+        Assert.True(WildcardPattern.IsMatch("\\{a,b}", "{a,b}"));
+        Assert.False(WildcardPattern.IsMatch("\\{a,b}", "a"));
+    }
+
+    [Fact]
+    public void Brace_InsideCharClass_NoExpansion()
+    {
+        // { inside a character class is not a brace group
+        Assert.True(WildcardPattern.IsMatch("[{]", "{"));
+        Assert.False(WildcardPattern.IsMatch("[{]", "a"));
+    }
+
+    [Fact]
+    public void Brace_UnmatchedBrace_Literal()
+    {
+        // Unmatched { is treated as literal
+        Assert.True(WildcardPattern.IsMatch("{abc", "{abc"));
+        Assert.False(WildcardPattern.IsMatch("{abc", "abc"));
+    }
+
+    [Fact]
+    public void Brace_CaseInsensitive()
+    {
+        Assert.True(WildcardPattern.IsMatch("{hello,world}", "HELLO", ignoreCase: true));
+        Assert.True(WildcardPattern.IsMatch("{hello,world}", "WORLD", ignoreCase: true));
+        Assert.False(WildcardPattern.IsMatch("{hello,world}", "HELLO", ignoreCase: false));
+    }
+
+    [Fact]
+    public void Brace_CompiledPattern_Reuse()
+    {
+        var p = WildcardPattern.Compile("*.{cs,fs}");
+        Assert.True(p.IsMatch("file.cs"));
+        Assert.True(p.IsMatch("file.fs"));
+        Assert.False(p.IsMatch("file.vb"));
+    }
+
+    [Fact]
+    public void Brace_ToString_PreservesOriginal()
+    {
+        var p = WildcardPattern.Compile("*.{cs,fs}");
+        Assert.Equal("*.{cs,fs}", p.ToString());
+    }
+
+    [Fact]
+    public void Brace_WithWildcardsInsideAlternatives()
+    {
+        Assert.True(WildcardPattern.IsMatch("{*.cs,*.fs}", "file.cs"));
+        Assert.True(WildcardPattern.IsMatch("{*.cs,*.fs}", "file.fs"));
+        Assert.False(WildcardPattern.IsMatch("{*.cs,*.fs}", "file.txt"));
+    }
+
     // ── MinLength tests ──
 
     [Theory]
@@ -402,6 +491,9 @@ public class WildcardPatternTests
     [InlineData("*[!abc]*", 1)]
     [InlineData("**", 0)]
     [InlineData("a*b*c", 3)]
+    [InlineData("{a,bb,ccc}", 1)]
+    [InlineData("*.{cs,fs}", 3)]
+    [InlineData("{hello,hi}", 2)]
     public void MinLength_ComputedCorrectly(string pattern, int expectedMinLength)
     {
         var p = WildcardPattern.Compile(pattern);

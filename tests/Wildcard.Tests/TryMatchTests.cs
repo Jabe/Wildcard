@@ -116,7 +116,7 @@ public class TryMatchTests
         Assert.Equal(["2024-03-15", "ERROR", "timeout"], captures);
     }
 
-    [Fact]
+[Fact]
     public void PureLiteral_TryMatch_Failure()
     {
         var p = WildcardPattern.Compile("exact");
@@ -339,5 +339,47 @@ public class TryMatchTests
         // Multi-char literal in General shape with ignoreCase — MISMATCH path (line 558)
         var p = WildcardPattern.Compile("[a-z]Hello", ignoreCase: true);
         Assert.False(p.IsMatch("athere")); // "there" vs "Hello" → Equals returns false
+    }
+
+    // ── Brace alternation ──
+
+    [Fact]
+    public void Brace_CapturesFromMatchingAlternative()
+    {
+        var p = WildcardPattern.Compile("{error,warn}: *");
+        Assert.True(p.TryMatch("error: timeout", out var captures));
+        Assert.Equal(["timeout"], captures);
+    }
+
+    [Fact]
+    public void Brace_SecondAlternativeMatches()
+    {
+        var p = WildcardPattern.Compile("{error,warn}: *");
+        Assert.True(p.TryMatch("warn: low memory", out var captures));
+        Assert.Equal(["low memory"], captures);
+    }
+
+    [Fact]
+    public void Brace_NoMatch_ReturnsFalse()
+    {
+        var p = WildcardPattern.Compile("{error,warn}: *");
+        Assert.False(p.TryMatch("info: ok", out var captures));
+        Assert.Empty(captures);
+    }
+
+    [Fact]
+    public void Brace_SuffixAlternation_Captures()
+    {
+        var p = WildcardPattern.Compile("*.{cs,fs}");
+        Assert.True(p.TryMatch("file.cs", out var captures));
+        Assert.Equal(["file"], captures);
+    }
+
+    [Fact]
+    public void Brace_NoBracesNoCaptures()
+    {
+        var p = WildcardPattern.Compile("{hello,world}");
+        Assert.True(p.TryMatch("hello", out var captures));
+        Assert.Empty(captures);
     }
 }

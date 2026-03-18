@@ -650,7 +650,7 @@ static string NormalizeContentPattern(string pattern)
     for (int i = 0; i < pattern.Length; i++)
     {
         if (pattern[i] == '\\') { i++; continue; } // skip escaped char
-        if (pattern[i] is '*' or '?' or '[') return pattern;
+        if (pattern[i] is '*' or '?' or '[' or '{') return pattern;
     }
     return $"*{pattern}*";
 }
