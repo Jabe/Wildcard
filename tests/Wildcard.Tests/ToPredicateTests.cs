@@ -102,4 +102,38 @@ public class ToPredicateTests
         var regex = Assert.IsType<PatternPredicate.Regex>(pred);
         Assert.Equal("^.*$", regex.Pattern);
     }
+
+    // ── Brace alternation → AnyOf ──
+
+    [Fact]
+    public void BraceAlternation_ReturnsAnyOf()
+    {
+        var pred = WildcardPattern.Compile("{error,warn}: *").ToPredicate();
+        var anyOf = Assert.IsType<PatternPredicate.AnyOf>(pred);
+        Assert.Equal(2, anyOf.Alternatives.Length);
+        var a0 = Assert.IsType<PatternPredicate.StartsWith>(anyOf.Alternatives[0]);
+        Assert.Equal("error: ", a0.Prefix);
+        var a1 = Assert.IsType<PatternPredicate.StartsWith>(anyOf.Alternatives[1]);
+        Assert.Equal("warn: ", a1.Prefix);
+    }
+
+    [Fact]
+    public void BraceAlternation_MixedShapes()
+    {
+        var pred = WildcardPattern.Compile("{exact,prefix*,*suffix}").ToPredicate();
+        var anyOf = Assert.IsType<PatternPredicate.AnyOf>(pred);
+        Assert.Equal(3, anyOf.Alternatives.Length);
+        Assert.IsType<PatternPredicate.Exact>(anyOf.Alternatives[0]);
+        Assert.IsType<PatternPredicate.StartsWith>(anyOf.Alternatives[1]);
+        Assert.IsType<PatternPredicate.EndsWith>(anyOf.Alternatives[2]);
+    }
+
+    [Fact]
+    public void BraceAlternation_IgnoreCase_Propagates()
+    {
+        var pred = WildcardPattern.Compile("{a,b}", ignoreCase: true).ToPredicate();
+        var anyOf = Assert.IsType<PatternPredicate.AnyOf>(pred);
+        Assert.True(anyOf.IgnoreCase);
+        Assert.All(anyOf.Alternatives, a => Assert.True(a.IgnoreCase));
+    }
 }

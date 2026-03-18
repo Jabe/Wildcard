@@ -417,6 +417,14 @@ public sealed class WildcardPattern
     /// </summary>
     public PatternPredicate ToPredicate()
     {
+        if (_alternatives is not null)
+        {
+            var preds = new PatternPredicate[_alternatives.Length];
+            for (int i = 0; i < _alternatives.Length; i++)
+                preds[i] = _alternatives[i].ToPredicate();
+            return new PatternPredicate.AnyOf(preds, _ignoreCase);
+        }
+
         if (_segments.Length == 0)
             return new PatternPredicate.Exact("", _ignoreCase);
 

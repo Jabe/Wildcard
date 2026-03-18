@@ -50,4 +50,14 @@ public abstract class PatternPredicate
     {
         public string Pattern { get; } = pattern;
     }
+
+    /// <summary>
+    /// Disjunction of multiple predicates (OR semantics).
+    /// Produced by brace alternation patterns like <c>{error,warn}: *</c>.
+    /// SQL: <c>(column LIKE 'error: %' OR column LIKE 'warn: %')</c>.
+    /// </summary>
+    public sealed class AnyOf(PatternPredicate[] alternatives, bool ignoreCase = false) : PatternPredicate(ignoreCase)
+    {
+        public PatternPredicate[] Alternatives { get; } = alternatives;
+    }
 }
