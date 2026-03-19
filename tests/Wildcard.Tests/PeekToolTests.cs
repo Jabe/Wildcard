@@ -1,0 +1,136 @@
+using Wildcard.Mcp.Tools;
+
+namespace Wildcard.Tests;
+
+public class PeekToolTests : IDisposable
+{
+    private readonly string _tempDir;
+
+    public PeekToolTests()
+    {
+        _tempDir = Path.Combine(Directory.GetCurrentDirectory(), ".test_peek_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tempDir, recursive: true); }
+        catch { /* best effort */ }
+    }
+
+    private void CreateFile(string relativePath, string content)
+    {
+        var fullPath = Path.Combine(_tempDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        File.WriteAllText(fullPath, content);
+    }
+
+    [Fact]
+    public void SingleFile_ReadsContent()
+    {
+        CreateFile("test.txt", "hello\nworld\n");
+
+        var result = PeekTool.Peek(["test.txt"], base_directory: _tempDir);
+
+        Assert.Contains("test.txt", result);
+        Assert.Contains("hello", result);
+        Assert.Contains("world", result);
+    }
+
+    [Fact]
+    public void MultipleFiles_ReadsAll()
+    {
+        CreateFile("a.txt", "alpha\n");
+        CreateFile("b.txt", "beta\n");
+
+        var result = PeekTool.Peek(["a.txt", "b.txt"], base_directory: _tempDir);
+
+        Assert.Contains("a.txt", result);
+        Assert.Contains("alpha", result);
+        Assert.Contains("b.txt", result);
+        Assert.Contains("beta", result);
+    }
+
+    [Fact]
+    public void LineRange_ReadsSpecificLines()
+    {
+        CreateFile("range.txt", "line1\nline2\nline3\nline4\nline5\n");
+
+        var result = PeekTool.Peek(["range.txt"],
+            base_directory: _tempDir,
+            start_lines: [2], end_lines: [4]);
+
+        Assert.Contains("line2", result);
+        Assert.Contains("line3", result);
+        Assert.Contains("line4", result);
+        Assert.DoesNotContain("line1", result);
+        Assert.DoesNotContain("line5", result);
+    }
+
+    [Fact]
+    public void Budget_TruncatesWhenExceeded()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 200; i++)
+            sb.AppendLine($"This is a rather long line number {i} with plenty of content to fill the budget quickly and ensure truncation occurs properly.");
+        CreateFile("big.txt", sb.ToString());
+        CreateFile("small.txt", "should not appear\n");
+
+        var result = PeekTool.Peek(["big.txt", "small.txt"], base_directory: _tempDir, max_chars: 200);
+
+        Assert.Contains("big.txt", result);
+        // Should either show budget exceeded or truncated
+        Assert.True(
+            result.Contains("budget exceeded") || result.Contains("truncated"),
+            "Should indicate budget limit was reached");
+    }
+
+    [Fact]
+    public void FileNotFound_ReportsError()
+    {
+        var result = PeekTool.Peek(["nonexistent.txt"], base_directory: _tempDir);
+
+        Assert.Contains("File not found", result);
+    }
+
+    [Fact]
+    public void EmptyFiles_ReportsEmpty()
+    {
+        CreateFile("empty.txt", "");
+
+        var result = PeekTool.Peek(["empty.txt"], base_directory: _tempDir);
+
+        Assert.Contains("empty", result);
+    }
+
+    [Fact]
+    public void NoFiles_ReportsNoFiles()
+    {
+        var result = PeekTool.Peek([], base_directory: _tempDir);
+
+        Assert.Contains("No files specified", result);
+    }
+
+    [Fact]
+    public void RelativePaths_ResolvedCorrectly()
+    {
+        CreateFile("sub/file.txt", "content\n");
+
+        var result = PeekTool.Peek(["sub/file.txt"], base_directory: _tempDir);
+
+        Assert.Contains("sub/file.txt", result);
+        Assert.Contains("content", result);
+    }
+
+    [Fact]
+    public void LineNumbers_AreIncluded()
+    {
+        CreateFile("numbered.txt", "first\nsecond\nthird\n");
+
+        var result = PeekTool.Peek(["numbered.txt"], base_directory: _tempDir);
+
+        Assert.Contains("1:", result);
+        Assert.Contains("2:", result);
+        Assert.Contains("3:", result);
+    }
+}

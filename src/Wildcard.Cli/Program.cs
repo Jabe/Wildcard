@@ -22,6 +22,11 @@ var contextOption = new Option<int>("-C", "--context") { Description = "Show N l
 var replaceOption = new Option<string?>("-r", "--replace") { Description = "Replace matched content with this string (dry-run by default)" };
 var writeOption = new Option<bool>("--write") { Description = "Write replacements to files (default: dry-run preview)" };
 var countOption = new Option<bool>("-c", "--count") { Description = "Show count of matching lines per file instead of line content" };
+var treeOption = new Option<bool>("--tree") { Description = "Render file listing as an indented ASCII tree (only in file-list mode, no content patterns)" };
+var depthOption = new Option<int>("--depth") { Description = "Maximum directory depth for tree output (default: 5)" };
+var allOfOption = new Option<bool>("--all") { Description = "AND mode: all content patterns must match in a file (default: OR mode)" };
+var maxFilesOption = new Option<int?>("--max-files") { Description = "Maximum number of files to show in output" };
+var maxMatchesOption = new Option<int?>("--max-matches") { Description = "Maximum number of matches to show per file" };
 
 var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, search content with wildcard patterns.")
 {
@@ -39,8 +44,11 @@ var rootCommand = new RootCommand("Fast wildcard grep tool — glob files, searc
     contextOption,
     replaceOption,
     writeOption,
-    countOption,
-};
+    countOption,    treeOption,
+    depthOption,
+    allOfOption,
+    maxFilesOption,
+    maxMatchesOption,};
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
@@ -64,7 +72,12 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         parseResult.GetValue(replaceOption),
         parseResult.GetValue(writeOption),
         parseResult.GetValue(countOption),
-        [.. rawPatterns]
+        [.. rawPatterns],
+        parseResult.GetValue(treeOption),
+        parseResult.GetValue(depthOption) is int d && d > 0 ? d : 5,
+        parseResult.GetValue(allOfOption),
+        parseResult.GetValue(maxFilesOption),
+        parseResult.GetValue(maxMatchesOption)
     );
 
     return await RunAsync(parsed);
@@ -242,6 +255,31 @@ static async Task<int> RunAsync(CliArgs parsed)
             return 0;
         }
 
+        // Tree mode: collect paths and render as tree
+        if (parsed.Tree)
+        {
+            var treePaths = new List<string>();
+            int treeLimit = parsed.MaxFiles ?? 10000;
+            int treeTotal = 0;
+            foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
+            {
+                var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
+                if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                treeTotal++;
+                if (treePaths.Count < treeLimit)
+                    treePaths.Add(relPath);
+            }
+            if (treeTotal == 0)
+            {
+                Console.Error.WriteLine("No files found.");
+                return 1;
+            }
+            stdout.Write(TreeRenderer.Render(treePaths, parsed.TreeDepth));
+            if (treeTotal > treeLimit)
+                Console.Error.WriteLine($"... and {treeTotal - treeLimit} more files ({treeTotal} total, showing first {treeLimit})");
+            return 0;
+        }
+
         var knownFiles = parsed.Watch ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         foreach (var file in Glob.Match(parsed.GlobPattern, options: globOptions))
         {
@@ -273,6 +311,22 @@ static async Task<int> RunAsync(CliArgs parsed)
         options: parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null
     );
 
+    // AND mode: build per-pattern matchers for pre-filtering
+    FilePathMatcher[]? allOfMatchers = null;
+    if (parsed.AllOf && parsed.ContentPatterns.Count > 1)
+    {
+        var matcherOpts = parsed.IgnoreCase ? new FilePathMatcher.Options { IgnoreCase = true } : null;
+        var excludeArr = parsed.ExcludePatterns.Count > 0 ? parsed.ExcludePatterns.ToArray() : null;
+        allOfMatchers = new FilePathMatcher[parsed.ContentPatterns.Count];
+        for (int i = 0; i < parsed.ContentPatterns.Count; i++)
+            allOfMatchers[i] = FilePathMatcher.Create(include: [parsed.ContentPatterns[i]], exclude: excludeArr, options: matcherOpts);
+    }
+
+    int maxOutputFiles = parsed.MaxFiles ?? int.MaxValue;
+    int maxOutputMatches = parsed.MaxMatches ?? int.MaxValue;
+    int outputFileCount = 0;
+    int skippedOutputFiles = 0;
+
     // Count mode: per-file match counts + summary
     if (parsed.Count)
     {
@@ -302,12 +356,13 @@ static async Task<int> RunAsync(CliArgs parsed)
             if (IsPathExcluded(relPath, excludePathPatterns)) return;
             var fileMatches = matcher.Scan(file);
             if (fileMatches.Count == 0) return;
+            if (!PassesAllOfCheck(file, allOfMatchers)) return;
 
             lock (countLock)
             {
                 totalMatches += fileMatches.Count;
                 totalFiles++;
-                if (!parsed.FilesOnly)
+                if (!parsed.FilesOnly && totalFiles <= maxOutputFiles)
                 {
                     if (useColor)
                         stdout.WriteLine($"\x1b[35m{relPath}\x1b[0m:\x1b[32m{fileMatches.Count}\x1b[0m");
@@ -326,6 +381,8 @@ static async Task<int> RunAsync(CliArgs parsed)
 
         if (!parsed.FilesOnly)
             stdout.WriteLine();
+        if (totalFiles > maxOutputFiles)
+            Console.Error.WriteLine($"... and {totalFiles - maxOutputFiles} more files ({totalFiles} total, showing first {maxOutputFiles})");
         var summary = $"{totalMatches} match{(totalMatches > 1 ? "es" : "")} in {totalFiles} file{(totalFiles > 1 ? "s" : "")}.";
         stdout.WriteLine(useColor ? $"\x1b[1m{summary}\x1b[0m" : summary);
         return 0;
@@ -349,14 +406,18 @@ static async Task<int> RunAsync(CliArgs parsed)
         });
         var filesOnlyLock = new object();
         var filesOnlyParallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 };
+        int filesOnlyCount = 0;
         await Parallel.ForEachAsync(filesOnlyChannel.Reader.ReadAllAsync(), filesOnlyParallelOpts, async (file, _) =>
         {
             await Task.CompletedTask;
             var relPath = Path.GetRelativePath(cwd, file).Replace('\\', '/');
             if (IsPathExcluded(relPath, excludePathPatterns)) return;
-            if (matcher.ContainsMatch(file))
+            if (!PassesAllOfFilter(file, matcher, allOfMatchers)) return;
+
+            lock (filesOnlyLock)
             {
-                lock (filesOnlyLock)
+                filesOnlyCount++;
+                if (filesOnlyCount <= maxOutputFiles)
                 {
                     stdout.WriteLine(Path.GetRelativePath(cwd, file));
                     anyOutput = true;
@@ -364,6 +425,8 @@ static async Task<int> RunAsync(CliArgs parsed)
             }
         });
         await filesOnlyProducer;
+        if (filesOnlyCount > maxOutputFiles)
+            Console.Error.WriteLine($"... and {filesOnlyCount - maxOutputFiles} more files ({filesOnlyCount} total, showing first {maxOutputFiles})");
         return anyOutput ? 0 : 1;
     }
 
@@ -421,6 +484,7 @@ static async Task<int> RunAsync(CliArgs parsed)
         {
             var contextLines = matcher.ScanWithContext(parsed.BeforeContext, parsed.AfterContext, file);
             if (contextLines.Count == 0) return;
+            if (!PassesAllOfCheck(file, allOfMatchers)) return;
 
             // Track matched line counts for watch mode
             if (parsed.Watch)
@@ -486,6 +550,8 @@ static async Task<int> RunAsync(CliArgs parsed)
 
             lock (outputLock)
             {
+                outputFileCount++;
+                if (outputFileCount > maxOutputFiles) { skippedOutputFiles++; return; }
                 if (anyOutput)
                     stdout.WriteLine();
                 anyOutput = true;
@@ -495,6 +561,7 @@ static async Task<int> RunAsync(CliArgs parsed)
         else
         {
             var fileMatches = matcher.Scan(file);
+            if (!PassesAllOfCheck(file, allOfMatchers)) { /* skip file */ return; }
 
             // Track matched line counts for watch mode (multiset for duplicate text)
             if (parsed.Watch)
@@ -521,8 +588,19 @@ static async Task<int> RunAsync(CliArgs parsed)
                 sb.AppendLine(relPath);
 
             int availableWidth = maxWidth > 0 ? maxWidth - (2 + width + 2) : 0;
+            int matchesShown = 0;
             foreach (var match in fileMatches)
             {
+                matchesShown++;
+                if (matchesShown > maxOutputMatches)
+                {
+                    int remaining = fileMatches.Count - maxOutputMatches;
+                    if (useColor)
+                        sb.AppendLine($"  \x1b[90m... and {remaining} more matches in this file\x1b[0m");
+                    else
+                        sb.AppendLine($"  ... and {remaining} more matches in this file");
+                    break;
+                }
                 var lineNum = match.LineNumber.ToString().PadLeft(width);
                 var lineText = TruncateLine(match.Line, availableWidth, highlightLiterals, parsed.IgnoreCase);
 
@@ -541,6 +619,8 @@ static async Task<int> RunAsync(CliArgs parsed)
             // Atomic write — no interleaving between files
             lock (outputLock)
             {
+                outputFileCount++;
+                if (outputFileCount > maxOutputFiles) { skippedOutputFiles++; return; }
                 if (anyOutput)
                     stdout.WriteLine();
                 anyOutput = true;
@@ -550,6 +630,9 @@ static async Task<int> RunAsync(CliArgs parsed)
     });
 
     await producer;
+
+    if (skippedOutputFiles > 0)
+        Console.Error.WriteLine($"... and {skippedOutputFiles} more files matched (showing first {maxOutputFiles})");
 
     if (!parsed.Watch)
         return anyOutput ? 0 : 1;
@@ -815,6 +898,25 @@ static bool IsPathExcluded(string relPath, WildcardPattern[]? excludePathPattern
     return false;
 }
 
+static bool PassesAllOfFilter(string file, FilePathMatcher matcher, FilePathMatcher[]? allOfMatchers)
+{
+    if (allOfMatchers is not null)
+    {
+        foreach (var m in allOfMatchers)
+            if (!m.ContainsMatch(file)) return false;
+        return true;
+    }
+    return matcher.ContainsMatch(file);
+}
+
+static bool PassesAllOfCheck(string file, FilePathMatcher[]? allOfMatchers)
+{
+    if (allOfMatchers is null) return true;
+    foreach (var m in allOfMatchers)
+        if (!m.ContainsMatch(file)) return false;
+    return true;
+}
+
 static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, WildcardPattern[]? excludePathPatterns, Action<string> onFile)
 {
     var baseDir = GlobHelper.GetWatchBaseDirectory(parsed.GlobPattern, cwd);
@@ -902,4 +1004,4 @@ static async Task RunWatchLoop(CliArgs parsed, string cwd, bool useColor, Wildca
     Console.Error.WriteLine();
 }
 
-record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext, string? ReplaceWith, bool WriteChanges, bool Count, List<string> RawPatterns);
+record CliArgs(string GlobPattern, List<string> ContentPatterns, List<string> ExcludePatterns, List<string> ExcludePathPatterns, bool IgnoreCase, bool FilesOnly, bool NoIgnore, bool FollowSymlinks, bool Watch, int BeforeContext, int AfterContext, string? ReplaceWith, bool WriteChanges, bool Count, List<string> RawPatterns, bool Tree, int TreeDepth, bool AllOf, int? MaxFiles, int? MaxMatches);

@@ -217,6 +217,11 @@ Options:
   -B, --before-context <N>  Show N lines before each match
   -C, --context <N>         Show N lines before and after each match
   -c, --count               Show count of matching lines per file
+  --tree                    Render file list as an indented ASCII tree
+  --depth <N>               Max directory depth for tree output (default: 5)
+  --all                     AND mode — file must contain ALL patterns
+  --max-files <N>           Max files to include in output
+  --max-matches <N>         Max matches to show per file
   -r, --replace <text>      Replace matched content with this string (dry-run preview)
   --write                   Write replacements to files (requires --replace)
 ```
@@ -225,8 +230,11 @@ Examples:
 
 ```bash
 wcg "src/**/*.cs"                         # List matching files
+wcg "src/**/*.cs" --tree                  # List matching files as an ASCII tree
+wcg "src/**/*.cs" --tree --depth 2        # Tree capped at 2 levels deep
 wcg "**/*.log" ERROR                      # Search for lines containing ERROR
 wcg "**/*.log" ERROR WARN                 # OR mode — containing ERROR or WARN
+wcg "**/*.log" ERROR WARN --all           # AND mode — file must contain both
 wcg "**/*.cs" TODO -x DONE               # Search TODO, exclude DONE
 wcg "**/*.cs" TODO FIXME -x DONE         # Search TODO or FIXME, exclude DONE
 wcg "**/*.cs" TODO -i                    # Case-insensitive search
@@ -256,6 +264,10 @@ wcg "**/*.log" "[!D]*"                  # Lines not starting with D (excludes DE
 wcg "**/*.log" "{ERROR,WARN}*"          # Lines starting with ERROR or WARN
 wcg "**/*.cs" "{TODO,FIXME,HACK}*"      # Lines starting with any of those markers
 
+# Output caps:
+wcg "**/*.log" ERROR --max-files 10      # Stop after 10 files
+wcg "**/*.log" ERROR --max-matches 5     # Show at most 5 matches per file
+
 # Count mode:
 wcg "**/*.cs" TODO -c                   # Per-file match counts + summary
 wcg "**/*.cs" TODO -c -l                # Summary only (total matches and files)
@@ -278,9 +290,10 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 
 | Tool | Description |
 |------|-------------|
-| `wildcard_glob` | Find files by glob pattern — respects `.gitignore`, supports count mode |
-| `wildcard_grep` | Search file contents with context lines, count mode, and parallel memory-mapped I/O |
+| `wildcard_glob` | Find files by glob pattern — respects `.gitignore`, supports count mode and tree output |
+| `wildcard_grep` | Search file contents with context lines, count mode, AND/OR mode, output caps, and parallel memory-mapped I/O. Also acts as a cross-platform file reader (cat/head) |
 | `wildcard_replace` | Find-and-replace across files — dry-run preview by default, atomic writes, capture groups |
+| `wildcard_peek` | Batch file reader — read multiple files in one call with optional line ranges and a character budget |
 | `wildcard_watch` | Watch for file changes matching a glob pattern for a bounded duration |
 
 #### Install
@@ -320,7 +333,7 @@ Add to `.mcp.json` in your project root:
 }
 ```
 
-The server communicates over stdio and auto-discovers all four tools. All operations are **restricted to the working directory** — path traversal outside the project root is rejected by a guard that normalizes and validates every path before any file I/O.
+The server communicates over stdio and auto-discovers all five tools. All operations are **restricted to the working directory** — path traversal outside the project root is rejected by a guard that normalizes and validates every path before any file I/O.
 
 Pass `--live` to enable live mode: the server builds an in-memory index of all files at startup and keeps it current via filesystem watcher. Glob queries become an in-memory filter instead of a disk walk, which dramatically speeds up repeated searches on large codebases.
 
