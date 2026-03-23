@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "wildcard": {
+    "wildcard-dev": {
       "command": "wildcard-mcp",
       "args": ["--live"]
     }

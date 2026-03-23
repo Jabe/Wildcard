@@ -1,6 +1,6 @@
 {
     "servers": {
-        "wildcard": {
+        "wildcard-dev": {
             "type": "stdio",
             "command": "wildcard-mcp",
             "args": ["--live"]
