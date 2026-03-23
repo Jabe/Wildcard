@@ -2,7 +2,6 @@
 using System.Text;
 using System.Threading.Channels;
 using ModelContextProtocol.Server;
-using Wildcard;
 
 namespace Wildcard.Mcp.Tools;
 
@@ -23,22 +22,8 @@ public static class GlobTool
         WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create();
-        if (index is not null) summary.Live(index.FileCount);
-        summary
-            .Arg("pattern", pattern)
-            .Arg("base_directory", base_directory)
-            .Arg("exclude_paths", exclude_paths)
-            .Arg("respect_gitignore", respect_gitignore, true)
-            .Arg("follow_symlinks", follow_symlinks, false)
-            .Arg("limit", limit, 10000)
-            .Arg("count", count, false)
-            .Arg("tree", tree, false)
-            .Arg("max_depth", max_depth, 5)
-            .ToString();
-
         var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return summary + guardError;
+        if (guardError is not null) return guardError;
 
         // Use index when available and options match indexed state
         if (index is not null && respect_gitignore && !follow_symlinks)
@@ -55,15 +40,15 @@ public static class GlobTool
             }
 
             if (matched == 0)
-                return summary + "No files found.";
+                return "No files found.";
             if (count)
-                return summary + $"{matched} file{(matched > 1 ? "s" : "")} found.";
+                return $"{matched} file{(matched > 1 ? "s" : "")} found.";
             if (tree)
             {
                 var treeOutput = TreeRenderer.Render(paths, max_depth);
                 if (matched > limit)
-                    return summary + treeOutput + $"\n... and {matched - limit} more files ({matched} total, showing first {limit})";
-                return summary + treeOutput;
+                    return treeOutput + $"\n... and {matched - limit} more files ({matched} total, showing first {limit})";
+                return treeOutput;
             }
             var sb = new StringBuilder();
             foreach (var p in paths)
@@ -73,7 +58,7 @@ public static class GlobTool
             else
                 sb.AppendLine($"\n{matched} files found.");
 
-            return summary + sb.ToString();
+            return sb.ToString();
         }
 
         var options = new GlobOptions
@@ -124,17 +109,17 @@ public static class GlobTool
         await producer;
 
         if (matched2 == 0)
-            return summary + "No files found.";
+            return "No files found.";
 
         if (count)
-            return summary + $"{matched2} file{(matched2 > 1 ? "s" : "")} found.";
+            return $"{matched2} file{(matched2 > 1 ? "s" : "")} found.";
 
         if (tree)
         {
             var treeOutput = TreeRenderer.Render(paths2!, max_depth);
             if (matched2 > limit)
-                return summary + treeOutput + $"\n... and {matched2 - limit} more files ({matched2} total, showing first {limit})";
-            return summary + treeOutput;
+                return treeOutput + $"\n... and {matched2 - limit} more files ({matched2} total, showing first {limit})";
+            return treeOutput;
         }
 
         if (matched2 > limit)
@@ -142,6 +127,6 @@ public static class GlobTool
         else
             sb2.AppendLine($"\n{matched2} files found.");
 
-        return summary + sb2.ToString();
+        return sb2.ToString();
     }
 }

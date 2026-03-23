@@ -2,7 +2,6 @@
 using System.Text;
 using System.Threading.Channels;
 using ModelContextProtocol.Server;
-using Wildcard;
 
 namespace Wildcard.Mcp.Tools;
 
@@ -32,31 +31,8 @@ public static class GrepTool
         WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create();
-        if (index is not null) summary.Live(index.FileCount);
-        summary
-            .Arg("pattern", pattern)
-            .Arg("content_patterns", content_patterns)
-            .Arg("base_directory", base_directory)
-            .Arg("exclude_patterns", exclude_patterns)
-            .Arg("exclude_paths", exclude_paths)
-            .Arg("ignore_case", ignore_case, false)
-            .Arg("files_only", files_only, false)
-            .Arg("respect_gitignore", respect_gitignore, true)
-            .Arg("follow_symlinks", follow_symlinks, false)
-            .Arg("limit", limit, 500)
-            .Arg("before_context", before_context, 0)
-            .Arg("after_context", after_context, 0)
-            .Arg("context", context, 0)
-            .Arg("count", count, false)
-            .Arg("read_lines", read_lines, 0)
-            .Arg("all_of", all_of, false)
-            .Arg("max_files", max_files, 50)
-            .Arg("max_matches_per_file", max_matches_per_file, 20)
-            .ToString();
-
         var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return summary + guardError;
+        if (guardError is not null) return guardError;
         var globOptions = new GlobOptions
         {
             RespectGitignore = respect_gitignore,
@@ -74,7 +50,7 @@ public static class GrepTool
         if (content_patterns is null or { Length: 0 })
         {
             int lines = read_lines > 0 ? read_lines : 200;
-            return summary + await Task.Run(() => RunReadLines(pattern, baseDir, globOptions, excludePathPatterns, lines, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return await Task.Run(() => RunReadLines(pattern, baseDir, globOptions, excludePathPatterns, lines, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
         }
 
         // Normalize content patterns: plain words become *word* for substring matching
@@ -99,21 +75,21 @@ public static class GrepTool
 
         // read_lines mode with content patterns: expanded context around matches
         if (read_lines > 0)
-            return summary + await Task.Run(() => RunReadLinesWithMatches(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, read_lines, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return await Task.Run(() => RunReadLinesWithMatches(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, read_lines, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
         if (count)
-            return summary + await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, files_only, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, files_only, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
         if (files_only)
-            return summary + await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
         int resolvedBefore = before_context > 0 ? before_context : context;
         int resolvedAfter = after_context > 0 ? after_context : context;
 
         if (resolvedBefore > 0 || resolvedAfter > 0)
-            return summary + await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, resolvedBefore, resolvedAfter, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, resolvedBefore, resolvedAfter, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
 
-        return summary + await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+        return await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
     }
 
     /// <summary>

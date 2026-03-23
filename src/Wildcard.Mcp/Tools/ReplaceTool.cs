@@ -1,8 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Text;
-using System.Threading.Channels;
 using ModelContextProtocol.Server;
-using Wildcard;
 
 namespace Wildcard.Mcp.Tools;
 
@@ -24,23 +22,8 @@ public static class ReplaceTool
         WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create();
-        if (index is not null) summary.Live(index.FileCount);
-        summary
-            .Arg("pattern", pattern)
-            .Arg("find", find)
-            .Arg("replace", replace)
-            .Arg("base_directory", base_directory)
-            .Arg("exclude_paths", exclude_paths)
-            .Arg("ignore_case", ignore_case, false)
-            .Arg("respect_gitignore", respect_gitignore, true)
-            .Arg("follow_symlinks", follow_symlinks, false)
-            .Arg("dry_run", dry_run, true)
-            .Arg("limit", limit, 50)
-            .ToString();
-
         var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return summary + guardError;
+        if (guardError is not null) return guardError;
         var globOptions = new GlobOptions
         {
             RespectGitignore = respect_gitignore,
@@ -48,9 +31,9 @@ public static class ReplaceTool
         };
 
         if (string.IsNullOrEmpty(find))
-            return summary + "Error: find string cannot be empty.";
+            return "Error: find string cannot be empty.";
 
-        return summary + await Task.Run(() =>
+        return await Task.Run(() =>
         {
             // Normalize find pattern for file matching (auto-wrap plain words as *word*)
             var normalizedFind = NormalizeContentPattern(find);

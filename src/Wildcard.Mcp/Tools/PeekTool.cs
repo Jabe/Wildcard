@@ -15,17 +15,11 @@ public static class PeekTool
         [Description("Optional 1-based end line per file (parallel array with files). Omit or use 0 for 'end of file'.")] int[]? end_lines = null,
         [Description("Total character budget across all files (default: 10000). Once exceeded, remaining files are skipped with a note.")] int max_chars = 10000)
     {
-        var summary = ArgSummary.Create()
-            .Arg("files", files)
-            .Arg("base_directory", base_directory)
-            .Arg("max_chars", max_chars, 10000)
-            .ToString();
-
         if (files is null or { Length: 0 })
-            return summary + "No files specified.";
+            return "No files specified.";
 
         var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return summary + guardError;
+        if (guardError is not null) return guardError;
 
         var sb = new StringBuilder();
         int charsUsed = 0;
@@ -130,8 +124,8 @@ public static class PeekTool
         }
 
         if (filesRead == 0 && sb.Length == 0)
-            return summary + "No files could be read.";
+            return "No files could be read.";
 
-        return summary + sb.ToString();
+        return sb.ToString();
     }
 }

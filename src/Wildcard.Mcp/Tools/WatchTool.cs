@@ -2,7 +2,6 @@
 using System.Text;
 using System.Threading.Channels;
 using ModelContextProtocol.Server;
-using Wildcard;
 
 namespace Wildcard.Mcp.Tools;
 
@@ -18,23 +17,15 @@ public static class WatchTool
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         CancellationToken cancellationToken = default)
     {
-        var summary = ArgSummary.Create()
-            .Arg("pattern", pattern)
-            .Arg("base_directory", base_directory)
-            .Arg("content_patterns", content_patterns)
-            .Arg("duration_seconds", duration_seconds, 30)
-            .Arg("respect_gitignore", respect_gitignore, true)
-            .ToString();
-
         var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return summary + guardError;
+        if (guardError is not null) return guardError;
         duration_seconds = Math.Clamp(duration_seconds, 1, 120);
 
         var watchBaseDir = GlobHelper.GetWatchBaseDirectory(pattern, baseDir);
         bool recursive = GlobHelper.NeedsRecursiveWatch(pattern);
 
         if (!Directory.Exists(watchBaseDir))
-            return summary + $"Watch directory does not exist: {watchBaseDir}";
+            return $"Watch directory does not exist: {watchBaseDir}";
 
         // Load gitignore filter
         GitignoreFilter? gitFilter = null;
@@ -122,7 +113,7 @@ public static class WatchTool
         catch (OperationCanceledException) { }
 
         if (changes.Count == 0)
-            return summary + $"No changes detected during {duration_seconds}s watch period.";
+            return $"No changes detected during {duration_seconds}s watch period.";
 
         var sb = new StringBuilder();
         sb.AppendLine($"Changes detected during {duration_seconds}s watch period:");
@@ -138,7 +129,7 @@ public static class WatchTool
         sb.AppendLine();
         sb.AppendLine($"{changes.Count} change events across {grouped.Count()} files.");
 
-        return summary + sb.ToString();
+        return sb.ToString();
     }
 
     private static string NormalizeContentPattern(string pattern)
