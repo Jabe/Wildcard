@@ -17,8 +17,7 @@ public static class WatchTool
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         CancellationToken cancellationToken = default)
     {
-        var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return guardError;
+        var baseDir = PathGuard.Resolve(base_directory);
         duration_seconds = Math.Clamp(duration_seconds, 1, 120);
 
         var watchBaseDir = GlobHelper.GetWatchBaseDirectory(pattern, baseDir);

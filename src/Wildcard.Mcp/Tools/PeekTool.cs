@@ -18,8 +18,7 @@ public static class PeekTool
         if (files is null or { Length: 0 })
             return "No files specified.";
 
-        var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return guardError;
+        var baseDir = PathGuard.Resolve(base_directory);
 
         var sb = new StringBuilder();
         int charsUsed = 0;
@@ -45,11 +44,14 @@ public static class PeekTool
             }
 
             // Security: verify path is within allowed root
-            var (_, pathError) = PathGuard.Resolve(Path.GetDirectoryName(absolutePath));
-            if (pathError is not null)
+            try
+            {
+                PathGuard.Resolve(Path.GetDirectoryName(absolutePath));
+            }
+            catch (UnauthorizedAccessException)
             {
                 sb.AppendLine($"\n=== {filePath} ===");
-                sb.AppendLine($"Access denied: path is outside the allowed root.");
+                sb.AppendLine("Access denied: path is outside the allowed root.");
                 continue;
             }
 

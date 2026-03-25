@@ -22,8 +22,7 @@ public static class ReplaceTool
         WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return guardError;
+        var baseDir = PathGuard.Resolve(base_directory);
         var globOptions = new GlobOptions
         {
             RespectGitignore = respect_gitignore,

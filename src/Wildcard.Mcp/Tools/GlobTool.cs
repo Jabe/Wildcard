@@ -22,8 +22,7 @@ public static class GlobTool
         WorkspaceIndex? index = null,
         CancellationToken cancellationToken = default)
     {
-        var (baseDir, guardError) = PathGuard.Resolve(base_directory);
-        if (guardError is not null) return guardError;
+        var baseDir = PathGuard.Resolve(base_directory);
 
         // Use index when available and options match indexed state
         if (index is not null && respect_gitignore && !follow_symlinks)
