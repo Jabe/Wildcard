@@ -8,7 +8,7 @@ namespace Wildcard.Mcp.Tools;
 public static class PeekTool
 {
     [McpServerTool(Name = "wildcard_peek"), Description("Batch file reader. Pass a list of file paths with optional line ranges and get all their contents in one response. Respects a character budget so it won't flood context. Use after grep/glob to read the files you identified.")]
-    public static string Peek(
+    public static async Task<string> Peek(
         [Description("File paths to read (relative to base_directory, or absolute)")] string[] files,
         [Description("Base directory to resolve relative paths against (defaults to current working directory)")] string? base_directory = null,
         [Description("Optional 1-based start line per file (parallel array with files). Omit or use 0 for 'start of file'.")] int[]? start_lines = null,
@@ -76,7 +76,7 @@ public static class PeekTool
             try
             {
                 using var reader = new StreamReader(absolutePath);
-                while (reader.ReadLine() is { } line)
+                while (await reader.ReadLineAsync() is { } line)
                 {
                     lineNum++;
                     if (lineNum < startLine) continue;
