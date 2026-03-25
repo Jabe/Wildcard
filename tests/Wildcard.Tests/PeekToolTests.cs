@@ -26,11 +26,11 @@ public class PeekToolTests : IDisposable
     }
 
     [Fact]
-    public void SingleFile_ReadsContent()
+    public async Task SingleFile_ReadsContent()
     {
         CreateFile("test.txt", "hello\nworld\n");
 
-        var result = PeekTool.Peek(["test.txt"], base_directory: _tempDir);
+        var result = await PeekTool.Peek(["test.txt"], base_directory: _tempDir);
 
         Assert.Contains("test.txt", result);
         Assert.Contains("hello", result);
@@ -38,12 +38,12 @@ public class PeekToolTests : IDisposable
     }
 
     [Fact]
-    public void MultipleFiles_ReadsAll()
+    public async Task MultipleFiles_ReadsAll()
     {
         CreateFile("a.txt", "alpha\n");
         CreateFile("b.txt", "beta\n");
 
-        var result = PeekTool.Peek(["a.txt", "b.txt"], base_directory: _tempDir);
+        var result = await PeekTool.Peek(["a.txt", "b.txt"], base_directory: _tempDir);
 
         Assert.Contains("a.txt", result);
         Assert.Contains("alpha", result);
@@ -52,11 +52,11 @@ public class PeekToolTests : IDisposable
     }
 
     [Fact]
-    public void LineRange_ReadsSpecificLines()
+    public async Task LineRange_ReadsSpecificLines()
     {
         CreateFile("range.txt", "line1\nline2\nline3\nline4\nline5\n");
 
-        var result = PeekTool.Peek(["range.txt"],
+        var result = await PeekTool.Peek(["range.txt"],
             base_directory: _tempDir,
             start_lines: [2], end_lines: [4]);
 
@@ -68,7 +68,7 @@ public class PeekToolTests : IDisposable
     }
 
     [Fact]
-    public void Budget_TruncatesWhenExceeded()
+    public async Task Budget_TruncatesWhenExceeded()
     {
         var sb = new System.Text.StringBuilder();
         for (int i = 0; i < 200; i++)
@@ -76,7 +76,7 @@ public class PeekToolTests : IDisposable
         CreateFile("big.txt", sb.ToString());
         CreateFile("small.txt", "should not appear\n");
 
-        var result = PeekTool.Peek(["big.txt", "small.txt"], base_directory: _tempDir, max_chars: 200);
+        var result = await PeekTool.Peek(["big.txt", "small.txt"], base_directory: _tempDir, max_chars: 200);
 
         Assert.Contains("big.txt", result);
         // Should either show budget exceeded or truncated
@@ -86,48 +86,48 @@ public class PeekToolTests : IDisposable
     }
 
     [Fact]
-    public void FileNotFound_ReportsError()
+    public async Task FileNotFound_ReportsError()
     {
-        var result = PeekTool.Peek(["nonexistent.txt"], base_directory: _tempDir);
+        var result = await PeekTool.Peek(["nonexistent.txt"], base_directory: _tempDir);
 
         Assert.Contains("File not found", result);
     }
 
     [Fact]
-    public void EmptyFiles_ReportsEmpty()
+    public async Task EmptyFiles_ReportsEmpty()
     {
         CreateFile("empty.txt", "");
 
-        var result = PeekTool.Peek(["empty.txt"], base_directory: _tempDir);
+        var result = await PeekTool.Peek(["empty.txt"], base_directory: _tempDir);
 
         Assert.Contains("empty", result);
     }
 
     [Fact]
-    public void NoFiles_ReportsNoFiles()
+    public async Task NoFiles_ReportsNoFiles()
     {
-        var result = PeekTool.Peek([], base_directory: _tempDir);
+        var result = await PeekTool.Peek([], base_directory: _tempDir);
 
         Assert.Contains("No files specified", result);
     }
 
     [Fact]
-    public void RelativePaths_ResolvedCorrectly()
+    public async Task RelativePaths_ResolvedCorrectly()
     {
         CreateFile("sub/file.txt", "content\n");
 
-        var result = PeekTool.Peek(["sub/file.txt"], base_directory: _tempDir);
+        var result = await PeekTool.Peek(["sub/file.txt"], base_directory: _tempDir);
 
         Assert.Contains("sub/file.txt", result);
         Assert.Contains("content", result);
     }
 
     [Fact]
-    public void LineNumbers_AreIncluded()
+    public async Task LineNumbers_AreIncluded()
     {
         CreateFile("numbered.txt", "first\nsecond\nthird\n");
 
-        var result = PeekTool.Peek(["numbered.txt"], base_directory: _tempDir);
+        var result = await PeekTool.Peek(["numbered.txt"], base_directory: _tempDir);
 
         Assert.Contains("1:", result);
         Assert.Contains("2:", result);
