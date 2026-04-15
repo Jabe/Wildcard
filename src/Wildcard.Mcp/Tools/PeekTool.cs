@@ -10,15 +10,18 @@ public static class PeekTool
     [McpServerTool(Name = "wildcard_peek"), Description("Batch file reader. Pass a list of file paths with optional line ranges and get all their contents in one response. Respects a character budget so it won't flood context. Use after grep/glob to read the files you identified.")]
     public static async Task<string> Peek(
         [Description("File paths to read (relative to base_directory, or absolute)")] string[] files,
-        [Description("Base directory to resolve relative paths against (defaults to current working directory)")] string? base_directory = null,
+        [Description("Base directory to resolve relative paths against (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Optional 1-based start line per file (parallel array with files). Omit or use 0 for 'start of file'.")] int[]? start_lines = null,
         [Description("Optional 1-based end line per file (parallel array with files). Omit or use 0 for 'end of file'.")] int[]? end_lines = null,
-        [Description("Total character budget across all files (default: 10000). Once exceeded, remaining files are skipped with a note.")] int max_chars = 10000)
+        [Description("Total character budget across all files (default: 10000). Once exceeded, remaining files are skipped with a note.")] int max_chars = 10000,
+        RootsProvider rootsProvider = null!,
+        McpServer server = null!)
     {
         if (files is null or { Length: 0 })
             return "No files specified.";
 
-        var baseDir = PathGuard.Resolve(base_directory);
+        await rootsProvider.EnsureInitializedAsync(server, default);
+        var baseDir = rootsProvider.Resolve(base_directory);
 
         var sb = new StringBuilder();
         int charsUsed = 0;
@@ -46,7 +49,7 @@ public static class PeekTool
             // Security: verify path is within allowed root
             try
             {
-                PathGuard.Resolve(Path.GetDirectoryName(absolutePath));
+                rootsProvider.Resolve(Path.GetDirectoryName(absolutePath));
             }
             catch (UnauthorizedAccessException)
             {

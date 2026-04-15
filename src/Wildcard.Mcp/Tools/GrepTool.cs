@@ -12,7 +12,7 @@ public static class GrepTool
     public static async Task<string> Grep(
         [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Content search patterns — multiple patterns are OR'd by default (e.g. [\"ERROR\", \"WARN\"]). Set all_of=true for AND mode. Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\"). Optional — omit and set read_lines to use as a file reader.")] string[]? content_patterns = null,
-        [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
+        [Description("Base directory to search in (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Exclude lines matching these patterns")] string[]? exclude_patterns = null,
         [Description("Exclude files matching these glob patterns")] string[]? exclude_paths = null,
         [Description("Case-insensitive content matching (default: false)")] bool ignore_case = false,
@@ -28,10 +28,14 @@ public static class GrepTool
         [Description("AND mode — when true, a file must contain matches for ALL content_patterns to be included (default: false, OR mode)")] bool all_of = false,
         [Description("Maximum number of files to include in results (default: 50). Remaining files are counted in a summary note.")] int max_files = 50,
         [Description("Maximum number of matches to show per file (default: 20). Additional matches are noted per file.")] int max_matches_per_file = 20,
-        WorkspaceIndex? index = null,
+        RootsProvider rootsProvider = null!,
+        McpServer server = null!,
+        WorkspaceIndexManager? indexManager = null,
         CancellationToken cancellationToken = default)
     {
-        var baseDir = PathGuard.Resolve(base_directory);
+        await rootsProvider.EnsureInitializedAsync(server, cancellationToken);
+        var baseDir = rootsProvider.Resolve(base_directory);
+        var index = indexManager is not null ? await indexManager.GetIndexAsync(baseDir) : null;
         var globOptions = new GlobOptions
         {
             RespectGitignore = respect_gitignore,

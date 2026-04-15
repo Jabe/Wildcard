@@ -1,3 +1,5 @@
+using ModelContextProtocol.Server;
+using Wildcard.Mcp;
 using Wildcard.Mcp.Tools;
 
 namespace Wildcard.Tests;
@@ -5,15 +7,19 @@ namespace Wildcard.Tests;
 public class GrepToolTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly RootsProvider _rootsProvider;
 
     public GrepToolTests()
     {
         _tempDir = Path.Combine(Directory.GetCurrentDirectory(), ".test_grep_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
+        _rootsProvider = new RootsProvider();
+        _rootsProvider.SetRoots([_tempDir]);
     }
 
     public void Dispose()
     {
+        _rootsProvider.Dispose();
         try { Directory.Delete(_tempDir, recursive: true); }
         catch { /* best effort */ }
     }
@@ -32,7 +38,7 @@ public class GrepToolTests : IDisposable
     {
         CreateFile("hello.txt", "line1\nline2\nline3\nline4\nline5\n");
 
-        var result = await GrepTool.Grep("hello.txt", base_directory: _tempDir, respect_gitignore: false, read_lines: 3);
+        var result = await GrepTool.Grep("hello.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false, read_lines: 3);
 
         Assert.Contains("hello.txt", result);
         Assert.Contains("line1", result);
@@ -49,7 +55,7 @@ public class GrepToolTests : IDisposable
             sb.AppendLine($"line {i}");
         CreateFile("big.txt", sb.ToString());
 
-        var result = await GrepTool.Grep("big.txt", base_directory: _tempDir, respect_gitignore: false);
+        var result = await GrepTool.Grep("big.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false);
 
         Assert.Contains("line 1", result);
         Assert.Contains("line 200", result);
@@ -62,7 +68,7 @@ public class GrepToolTests : IDisposable
         CreateFile("a.txt", "alpha\nbeta\n");
         CreateFile("b.txt", "gamma\ndelta\n");
 
-        var result = await GrepTool.Grep("*.txt", base_directory: _tempDir, respect_gitignore: false, read_lines: 10);
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false, read_lines: 10);
 
         Assert.Contains("a.txt", result);
         Assert.Contains("alpha", result);
@@ -76,7 +82,7 @@ public class GrepToolTests : IDisposable
         for (int i = 0; i < 5; i++)
             CreateFile($"file{i}.txt", $"content{i}\n");
 
-        var result = await GrepTool.Grep("*.txt", base_directory: _tempDir, respect_gitignore: false, read_lines: 10, max_files: 2);
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false, read_lines: 10, max_files: 2);
 
         Assert.Contains("more files", result);
     }
@@ -91,7 +97,7 @@ public class GrepToolTests : IDisposable
             sb.AppendLine(i == 25 ? "MATCH_HERE" : $"line {i}");
         CreateFile("ctx.txt", sb.ToString());
 
-        var result = await GrepTool.Grep("ctx.txt", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("ctx.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["MATCH_HERE"], read_lines: 10);
 
         Assert.Contains("MATCH_HERE", result);
@@ -107,7 +113,7 @@ public class GrepToolTests : IDisposable
         CreateFile("logger_only.cs", "using ILogger;\nclass Foo {}\n");
         CreateFile("order_only.cs", "using IOrderService;\nclass Bar {}\n");
 
-        var result = await GrepTool.Grep("*.cs", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("*.cs", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["ILogger", "IOrderService"],
             all_of: true, files_only: true);
 
@@ -122,7 +128,7 @@ public class GrepToolTests : IDisposable
         CreateFile("both.cs", "using ILogger;\nusing IOrderService;\n");
         CreateFile("logger_only.cs", "using ILogger;\nclass Foo {}\n");
 
-        var result = await GrepTool.Grep("*.cs", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("*.cs", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["ILogger", "IOrderService"],
             all_of: false, files_only: true);
 
@@ -135,7 +141,7 @@ public class GrepToolTests : IDisposable
     {
         CreateFile("test.cs", "using ILogger;\n");
 
-        var result = await GrepTool.Grep("*.cs", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("*.cs", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["ILogger"],
             all_of: true, files_only: true);
 
@@ -150,7 +156,7 @@ public class GrepToolTests : IDisposable
         for (int i = 0; i < 10; i++)
             CreateFile($"f{i}.txt", "ERROR found\n");
 
-        var result = await GrepTool.Grep("*.txt", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["ERROR"],
             max_files: 3);
 
@@ -167,7 +173,7 @@ public class GrepToolTests : IDisposable
             sb.AppendLine($"ERROR line {i}");
         CreateFile("errors.txt", sb.ToString());
 
-        var result = await GrepTool.Grep("errors.txt", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("errors.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["ERROR"],
             max_matches_per_file: 5);
 
@@ -182,7 +188,7 @@ public class GrepToolTests : IDisposable
         CreateFile("both.cs", "ILogger\nIOrderService\n");
         CreateFile("one.cs", "ILogger\n");
 
-        var result = await GrepTool.Grep("*.cs", base_directory: _tempDir, respect_gitignore: false,
+        var result = await GrepTool.Grep("*.cs", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
             content_patterns: ["ILogger", "IOrderService"],
             all_of: true, count: true);
 

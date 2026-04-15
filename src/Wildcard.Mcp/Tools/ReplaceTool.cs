@@ -12,17 +12,21 @@ public static class ReplaceTool
         [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
         [Description("Text to find — plain string for literal match, or wildcard pattern with * ? [] for capture-group replacement")] string find,
         [Description("Replacement text (use $1, $2 for capture groups when find contains wildcards)")] string replace,
-        [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
+        [Description("Base directory to search in (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Exclude files matching these glob patterns")] string[]? exclude_paths = null,
         [Description("Case-insensitive matching (default: false)")] bool ignore_case = false,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
         [Description("Preview only, don't write changes (default: true)")] bool dry_run = true,
         [Description("Maximum number of files to process (default: 50)")] int limit = 50,
-        WorkspaceIndex? index = null,
+        RootsProvider rootsProvider = null!,
+        McpServer server = null!,
+        WorkspaceIndexManager? indexManager = null,
         CancellationToken cancellationToken = default)
     {
-        var baseDir = PathGuard.Resolve(base_directory);
+        await rootsProvider.EnsureInitializedAsync(server, cancellationToken);
+        var baseDir = rootsProvider.Resolve(base_directory);
+        var index = indexManager is not null ? await indexManager.GetIndexAsync(baseDir) : null;
         var globOptions = new GlobOptions
         {
             RespectGitignore = respect_gitignore,
@@ -83,12 +87,12 @@ public static class ReplaceTool
                 : FileReplacer.Apply(matchingFiles.ToArray(), find, replace, ignore_case);
 
             // Proactively update index after writes
-            if (!dry_run && index is not null)
+            if (!dry_run && indexManager is not null)
             {
                 foreach (var result in results)
                 {
                     if (result.Error is null && result.Replacements.Count > 0)
-                        index.NotifyFileWritten(result.FilePath);
+                        indexManager.NotifyFileWritten(result.FilePath);
                 }
             }
 

@@ -10,8 +10,10 @@ bool live = args.Contains("--live");
 
 var builder = Host.CreateEmptyApplicationBuilder(settings: null);
 
+builder.Services.AddSingleton<RootsProvider>();
+
 if (live)
-    builder.Services.AddSingleton(new WorkspaceIndex(Directory.GetCurrentDirectory()));
+    builder.Services.AddSingleton<WorkspaceIndexManager>();
 
 builder.Services
     .AddMcpServer(options =>

@@ -1,3 +1,5 @@
+using ModelContextProtocol.Server;
+using Wildcard.Mcp;
 using Wildcard.Mcp.Tools;
 
 namespace Wildcard.Tests;
@@ -5,15 +7,19 @@ namespace Wildcard.Tests;
 public class GlobToolTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly RootsProvider _rootsProvider;
 
     public GlobToolTests()
     {
         _tempDir = Path.Combine(Directory.GetCurrentDirectory(), ".test_glob_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
+        _rootsProvider = new RootsProvider();
+        _rootsProvider.SetRoots([_tempDir]);
     }
 
     public void Dispose()
     {
+        _rootsProvider.Dispose();
         try { Directory.Delete(_tempDir, recursive: true); }
         catch { /* best effort */ }
     }
@@ -32,7 +38,7 @@ public class GlobToolTests : IDisposable
         CreateFile("src/utils/helper.cs");
         CreateFile("readme.md");
 
-        var result = await GlobTool.Glob("**/*", base_directory: _tempDir, tree: true, respect_gitignore: false);
+        var result = await GlobTool.Glob("**/*", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, tree: true, respect_gitignore: false);
         Assert.Contains("app.cs", result);
         Assert.Contains("utils/", result);
         Assert.Contains("helper.cs", result);
@@ -47,7 +53,7 @@ public class GlobToolTests : IDisposable
         CreateFile("a/b/c/deep.txt");
         CreateFile("a/shallow.txt");
 
-        var result = await GlobTool.Glob("**/*", base_directory: _tempDir, tree: true, max_depth: 2, respect_gitignore: false);
+        var result = await GlobTool.Glob("**/*", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, tree: true, max_depth: 2, respect_gitignore: false);
 
         Assert.Contains("a/", result);
         Assert.Contains("shallow.txt", result);
@@ -60,7 +66,7 @@ public class GlobToolTests : IDisposable
         CreateFile("a.txt");
         CreateFile("b.txt");
 
-        var result = await GlobTool.Glob("**/*", base_directory: _tempDir, tree: true, count: true, respect_gitignore: false);
+        var result = await GlobTool.Glob("**/*", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, tree: true, count: true, respect_gitignore: false);
 
         // count should take precedence
         Assert.Contains("files found", result);
@@ -71,7 +77,7 @@ public class GlobToolTests : IDisposable
     [Fact]
     public async Task Tree_EmptyResult()
     {
-        var result = await GlobTool.Glob("**/*.nonexistent", base_directory: _tempDir, tree: true, respect_gitignore: false);
+        var result = await GlobTool.Glob("**/*.nonexistent", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, tree: true, respect_gitignore: false);
 
         Assert.Contains("No files found", result);
     }
@@ -82,7 +88,7 @@ public class GlobToolTests : IDisposable
         for (int i = 0; i < 10; i++)
             CreateFile($"file{i}.txt");
 
-        var result = await GlobTool.Glob("**/*", base_directory: _tempDir, tree: true, limit: 3, respect_gitignore: false);
+        var result = await GlobTool.Glob("**/*", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, tree: true, limit: 3, respect_gitignore: false);
 
         Assert.Contains("more files", result);
     }

@@ -11,7 +11,7 @@ public static class GlobTool
     [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files by glob pattern — blazing fast, respects .gitignore, supports count mode and tree output. Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes, {a,b,c} brace expansion.")]
     public static async Task<string> Glob(
         [Description("Glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
-        [Description("Base directory to search in (defaults to current working directory)")] string? base_directory = null,
+        [Description("Base directory to search in (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Glob patterns to exclude file paths (e.g. \"**/node_modules/**\")")] string[]? exclude_paths = null,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
         [Description("Follow symbolic links (default: false)")] bool follow_symlinks = false,
@@ -19,10 +19,14 @@ public static class GlobTool
         [Description("Return only the count of matching files, not the file paths (default: false)")] bool count = false,
         [Description("Render results as an indented ASCII tree instead of a flat list (default: false)")] bool tree = false,
         [Description("Maximum directory depth for tree output (default: 5). Only used when tree=true.")] int max_depth = 5,
-        WorkspaceIndex? index = null,
+        RootsProvider rootsProvider = null!,
+        McpServer server = null!,
+        WorkspaceIndexManager? indexManager = null,
         CancellationToken cancellationToken = default)
     {
-        var baseDir = PathGuard.Resolve(base_directory);
+        await rootsProvider.EnsureInitializedAsync(server, cancellationToken);
+        var baseDir = rootsProvider.Resolve(base_directory);
+        var index = indexManager is not null ? await indexManager.GetIndexAsync(baseDir) : null;
 
         // Use index when available and options match indexed state
         if (index is not null && respect_gitignore && !follow_symlinks)
