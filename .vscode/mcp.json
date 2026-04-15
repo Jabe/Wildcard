@@ -1,9 +1,23 @@
 {
-    "servers": {
-        "wildcard-dev": {
-            "type": "stdio",
-            "command": "wildcard-mcp",
-            "args": ["--live"]
-        }
-    }
+	"servers": {
+		"wildcard": {
+			"type": "stdio",
+			"command": "wildcard-mcp",
+			"args": [
+				"--live"
+			]
+		},
+		"wildcard-dev": {
+			"type": "stdio",
+			"command": "dotnet",
+			"args": [
+				"run",
+				"--project",
+				"${workspaceFolder}/src/Wildcard.Mcp/Wildcard.Mcp.csproj",
+				"--",
+				"--live"
+			]
+		}
+	},
+	"inputs": []
 }
