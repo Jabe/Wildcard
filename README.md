@@ -333,9 +333,9 @@ Add to `.mcp.json` in your project root:
 }
 ```
 
-The server communicates over stdio and auto-discovers all five tools. All operations are **restricted to the working directory** — path traversal outside the project root is rejected by a guard that normalizes and validates every path before any file I/O.
+The server communicates over stdio and auto-discovers all five tools. All operations are **restricted to the workspace roots** declared by the MCP client — path traversal outside the allowed roots is rejected by a guard that resolves symlinks and validates every path before any file I/O. The server requires the client to support the MCP [roots](https://modelcontextprotocol.io/docs/concepts/roots) capability; multiple roots are supported and dynamic root changes are handled via `notifications/roots/list_changed`.
 
-Pass `--live` to enable live mode: the server builds an in-memory index of all files at startup and keeps it current via filesystem watcher. Glob queries become an in-memory filter instead of a disk walk, which dramatically speeds up repeated searches on large codebases.
+Pass `--live` to enable live mode: the server builds an in-memory index of all files (one per root) at startup and keeps it current via filesystem watcher. Glob queries become an in-memory filter instead of a disk walk, which dramatically speeds up repeated searches on large codebases.
 
 ## Benchmarks
 
