@@ -1,12 +1,5 @@
 {
 	"servers": {
-		"wildcard": {
-			"type": "stdio",
-			"command": "wildcard-mcp",
-			"args": [
-				"--live"
-			]
-		},
 		"wildcard-dev": {
 			"type": "stdio",
 			"command": "dotnet",
