@@ -435,8 +435,39 @@ public sealed class WildcardPattern
             PatternShape.StarSuffix       => new PatternPredicate.EndsWith(_suffix!, _ignoreCase),
             PatternShape.StarContainsStar => new PatternPredicate.Contains(_prefix!, _ignoreCase),
             PatternShape.PrefixStarSuffix => new PatternPredicate.StartsAndEndsWith(_prefix!, _suffix!, _ignoreCase),
-            _                             => new PatternPredicate.Regex(ToRegex().ToString(), _ignoreCase),
+            _                             => TryBuildLikePredicate() ?? (PatternPredicate)new PatternPredicate.Regex(ToRegex().ToString(), _ignoreCase),
         };
+    }
+
+    private PatternPredicate.Like? TryBuildLikePredicate()
+    {
+        var sb = new StringBuilder();
+        foreach (ref readonly var seg in _segments.AsSpan())
+        {
+            switch (seg.Kind)
+            {
+                case SegmentKind.Star:         sb.Append('%'); break;
+                case SegmentKind.QuestionMark: sb.Append('_'); break;
+                case SegmentKind.QuestionRun:  sb.Append('_', seg.Count); break;
+                case SegmentKind.Literal:      EscapeLikeLiteral(sb, seg.Literal); break;
+                default:                       return null; // CharClass: not expressible in plain LIKE
+            }
+        }
+        return new PatternPredicate.Like(sb.ToString(), _ignoreCase);
+    }
+
+    private static void EscapeLikeLiteral(StringBuilder sb, string value)
+    {
+        foreach (var ch in value)
+        {
+            switch (ch)
+            {
+                case '%': sb.Append("[%]"); break;
+                case '_': sb.Append("[_]"); break;
+                case '[': sb.Append("[[]"); break;
+                default: sb.Append(ch); break;
+            }
+        }
     }
 
     /// <summary>

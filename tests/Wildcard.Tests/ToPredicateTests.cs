@@ -60,16 +60,40 @@ public class ToPredicateTests
     }
 
     [Theory]
-    [InlineData("t?st")]
     [InlineData("[abc]*")]
-    [InlineData("*a*b*")]
     [InlineData("report_[0-9]*.csv")]
-    public void General_ReturnsRegex(string pattern)
+    public void CharClass_ReturnsRegex(string pattern)
     {
         var pred = WildcardPattern.Compile(pattern).ToPredicate();
         var regex = Assert.IsType<PatternPredicate.Regex>(pred);
         Assert.StartsWith("^", regex.Pattern);
         Assert.EndsWith("$", regex.Pattern);
+    }
+
+    [Theory]
+    [InlineData("t?st", "t_st")]
+    [InlineData("*a*b*", "%a%b%")]
+    [InlineData("*a*b*c", "%a%b%c")]
+    [InlineData("a?b?c", "a_b_c")]
+    [InlineData("???", "___")]
+    [InlineData("*?*", "%_%")]
+    public void GeneralWildcards_ReturnsLike(string pattern, string expectedLike)
+    {
+        var pred = WildcardPattern.Compile(pattern).ToPredicate();
+        var like = Assert.IsType<PatternPredicate.Like>(pred);
+        Assert.Equal(expectedLike, like.LikePattern);
+    }
+
+    [Theory]
+    [InlineData("100%*?", "100[%]%_")]
+    [InlineData("a_b?c?d", "a[_]b_c_d")]
+    [InlineData("[[]x*?", "[[]x%_")]
+    public void Like_EscapesSpecialCharsInLiterals(string pattern, string expectedLike)
+    {
+        // "[[]" is a single-char class promoted to literal '['; ensures '[' gets LIKE-escaped to "[[]".
+        var pred = WildcardPattern.Compile(pattern).ToPredicate();
+        var like = Assert.IsType<PatternPredicate.Like>(pred);
+        Assert.Equal(expectedLike, like.LikePattern);
     }
 
     [Fact]
@@ -83,9 +107,17 @@ public class ToPredicateTests
     [Fact]
     public void IgnoreCase_PropagatesForRegex()
     {
-        var pred = WildcardPattern.Compile("t?st", ignoreCase: true).ToPredicate();
+        var pred = WildcardPattern.Compile("[abc]*", ignoreCase: true).ToPredicate();
         var regex = Assert.IsType<PatternPredicate.Regex>(pred);
         Assert.True(regex.IgnoreCase);
+    }
+
+    [Fact]
+    public void IgnoreCase_PropagatesForLike()
+    {
+        var pred = WildcardPattern.Compile("t?st", ignoreCase: true).ToPredicate();
+        var like = Assert.IsType<PatternPredicate.Like>(pred);
+        Assert.True(like.IgnoreCase);
     }
 
     [Fact]
@@ -96,11 +128,11 @@ public class ToPredicateTests
     }
 
     [Fact]
-    public void SingleStar_ReturnsRegex()
+    public void SingleStar_ReturnsLike()
     {
         var pred = WildcardPattern.Compile("*").ToPredicate();
-        var regex = Assert.IsType<PatternPredicate.Regex>(pred);
-        Assert.Equal("^.*$", regex.Pattern);
+        var like = Assert.IsType<PatternPredicate.Like>(pred);
+        Assert.Equal("%", like.LikePattern);
     }
 
     // ── Brace alternation → AnyOf ──

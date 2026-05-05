@@ -52,6 +52,17 @@ public abstract class PatternPredicate
     }
 
     /// <summary>
+    /// A pattern expressible as a SQL LIKE clause using <c>%</c> (any sequence) and <c>_</c> (single char).
+    /// Produced when a pattern uses multiple wildcards (* and ?) but no character classes or braces.
+    /// SQL: <c>column LIKE '%vlc%winarm64.exe'</c>.
+    /// </summary>
+    public sealed class Like(string likePattern, bool ignoreCase = false) : PatternPredicate(ignoreCase)
+    {
+        /// <summary>The LIKE expression string (e.g. <c>%vlc%winarm64.exe</c>).</summary>
+        public string LikePattern { get; } = likePattern;
+    }
+
+    /// <summary>
     /// Disjunction of multiple predicates (OR semantics).
     /// Produced by brace alternation patterns like <c>{error,warn}: *</c>.
     /// SQL: <c>(column LIKE 'error: %' OR column LIKE 'warn: %')</c>.
