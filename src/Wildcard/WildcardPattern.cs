@@ -441,33 +441,19 @@ public sealed class WildcardPattern
 
     private PatternPredicate.Like? TryBuildLikePredicate()
     {
-        var sb = new StringBuilder();
+        var parts = new List<LikePart>(_segments.Length);
         foreach (ref readonly var seg in _segments.AsSpan())
         {
             switch (seg.Kind)
             {
-                case SegmentKind.Star:         sb.Append('%'); break;
-                case SegmentKind.QuestionMark: sb.Append('_'); break;
-                case SegmentKind.QuestionRun:  sb.Append('_', seg.Count); break;
-                case SegmentKind.Literal:      EscapeLikeLiteral(sb, seg.Literal); break;
+                case SegmentKind.Star:         parts.Add(LikePart.AnySequence.Instance); break;
+                case SegmentKind.QuestionMark: parts.Add(new LikePart.AnySingle(1)); break;
+                case SegmentKind.QuestionRun:  parts.Add(new LikePart.AnySingle(seg.Count)); break;
+                case SegmentKind.Literal:      parts.Add(new LikePart.Literal(seg.Literal)); break;
                 default:                       return null; // CharClass: not expressible in plain LIKE
             }
         }
-        return new PatternPredicate.Like(sb.ToString(), _ignoreCase);
-    }
-
-    private static void EscapeLikeLiteral(StringBuilder sb, string value)
-    {
-        foreach (var ch in value)
-        {
-            switch (ch)
-            {
-                case '%': sb.Append("[%]"); break;
-                case '_': sb.Append("[_]"); break;
-                case '[': sb.Append("[[]"); break;
-                default: sb.Append(ch); break;
-            }
-        }
+        return new PatternPredicate.Like(parts.ToArray(), _ignoreCase);
     }
 
     /// <summary>

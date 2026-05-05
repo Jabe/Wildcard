@@ -70,31 +70,61 @@ public class ToPredicateTests
         Assert.EndsWith("$", regex.Pattern);
     }
 
-    [Theory]
-    [InlineData("t?st", "t_st")]
-    [InlineData("*a*b*", "%a%b%")]
-    [InlineData("*a*b*c", "%a%b%c")]
-    [InlineData("a?b?c", "a_b_c")]
-    [InlineData("???", "___")]
-    [InlineData("*?*", "%_%")]
-    public void GeneralWildcards_ReturnsLike(string pattern, string expectedLike)
+    [Fact]
+    public void Like_LiteralStarLiteral()
     {
-        var pred = WildcardPattern.Compile(pattern).ToPredicate();
-        var like = Assert.IsType<PatternPredicate.Like>(pred);
-        Assert.Equal(expectedLike, like.LikePattern);
+        var like = AssertLike(WildcardPattern.Compile("t?st").ToPredicate());
+        Assert.Collection(like.Parts,
+            p => Assert.Equal("t", Lit(p)),
+            p => Assert.Equal(1, Single(p)),
+            p => Assert.Equal("st", Lit(p)));
     }
 
-    [Theory]
-    [InlineData("100%*?", "100[%]%_")]
-    [InlineData("a_b?c?d", "a[_]b_c_d")]
-    [InlineData("[[]x*?", "[[]x%_")]
-    public void Like_EscapesSpecialCharsInLiterals(string pattern, string expectedLike)
+    [Fact]
+    public void Like_AlternatingStarsAndLiterals()
     {
-        // "[[]" is a single-char class promoted to literal '['; ensures '[' gets LIKE-escaped to "[[]".
-        var pred = WildcardPattern.Compile(pattern).ToPredicate();
-        var like = Assert.IsType<PatternPredicate.Like>(pred);
-        Assert.Equal(expectedLike, like.LikePattern);
+        var like = AssertLike(WildcardPattern.Compile("*a*b*").ToPredicate());
+        Assert.Collection(like.Parts,
+            p => Assert.IsType<LikePart.AnySequence>(p),
+            p => Assert.Equal("a", Lit(p)),
+            p => Assert.IsType<LikePart.AnySequence>(p),
+            p => Assert.Equal("b", Lit(p)),
+            p => Assert.IsType<LikePart.AnySequence>(p));
     }
+
+    [Fact]
+    public void Like_QuestionRunCollapses()
+    {
+        var like = AssertLike(WildcardPattern.Compile("???").ToPredicate());
+        Assert.Collection(like.Parts,
+            p => Assert.Equal(3, Single(p)));
+    }
+
+    [Fact]
+    public void Like_LiteralPercentAndUnderscoreAreNotEscapedAtThisLayer()
+    {
+        // Escaping is the renderer's job; Parts holds the raw literal.
+        var like = AssertLike(WildcardPattern.Compile("100%*?").ToPredicate());
+        Assert.Collection(like.Parts,
+            p => Assert.Equal("100%", Lit(p)),
+            p => Assert.IsType<LikePart.AnySequence>(p),
+            p => Assert.Equal(1, Single(p)));
+    }
+
+    [Fact]
+    public void SingleStar_ReturnsLikeWithSingleAnySequence()
+    {
+        var like = AssertLike(WildcardPattern.Compile("*").ToPredicate());
+        Assert.Collection(like.Parts,
+            p => Assert.IsType<LikePart.AnySequence>(p));
+    }
+
+    private static PatternPredicate.Like AssertLike(PatternPredicate pred) =>
+        Assert.IsType<PatternPredicate.Like>(pred);
+
+    private static string Lit(LikePart p) => Assert.IsType<LikePart.Literal>(p).Value;
+
+    private static int Single(LikePart p) => Assert.IsType<LikePart.AnySingle>(p).Count;
 
     [Fact]
     public void IgnoreCase_Propagates()
@@ -125,14 +155,6 @@ public class ToPredicateTests
     {
         var pred = WildcardPattern.ToPredicate("test*");
         Assert.IsType<PatternPredicate.StartsWith>(pred);
-    }
-
-    [Fact]
-    public void SingleStar_ReturnsLike()
-    {
-        var pred = WildcardPattern.Compile("*").ToPredicate();
-        var like = Assert.IsType<PatternPredicate.Like>(pred);
-        Assert.Equal("%", like.LikePattern);
     }
 
     // ── Brace alternation → AnyOf ──

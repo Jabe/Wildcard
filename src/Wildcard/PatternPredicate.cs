@@ -52,14 +52,14 @@ public abstract class PatternPredicate
     }
 
     /// <summary>
-    /// A pattern expressible as a SQL LIKE clause using <c>%</c> (any sequence) and <c>_</c> (single char).
-    /// Produced when a pattern uses multiple wildcards (* and ?) but no character classes or braces.
-    /// SQL: <c>column LIKE '%vlc%winarm64.exe'</c>.
+    /// A pattern expressible as a SQL LIKE clause. Stored as an ordered sequence of <see cref="LikePart"/>
+    /// so renderers can apply dialect-specific escape rules (T-SQL/Cosmos bracket-escape vs. Postgres backslash-escape).
+    /// Produced when a pattern uses multiple wildcards (* and ?) but no character classes.
     /// </summary>
-    public sealed class Like(string likePattern, bool ignoreCase = false) : PatternPredicate(ignoreCase)
+    public sealed class Like(LikePart[] parts, bool ignoreCase = false) : PatternPredicate(ignoreCase)
     {
-        /// <summary>The LIKE expression string (e.g. <c>%vlc%winarm64.exe</c>).</summary>
-        public string LikePattern { get; } = likePattern;
+        /// <summary>The ordered parts of the LIKE pattern.</summary>
+        public LikePart[] Parts { get; } = parts;
     }
 
     /// <summary>
@@ -70,5 +70,35 @@ public abstract class PatternPredicate
     public sealed class AnyOf(PatternPredicate[] alternatives, bool ignoreCase = false) : PatternPredicate(ignoreCase)
     {
         public PatternPredicate[] Alternatives { get; } = alternatives;
+    }
+}
+
+/// <summary>
+/// A single component of a <see cref="PatternPredicate.Like"/> pattern.
+/// Discriminated union over <see cref="AnySequence"/>, <see cref="AnySingle"/>, and <see cref="Literal"/>.
+/// </summary>
+public abstract class LikePart
+{
+    private LikePart() { }
+
+    /// <summary>Matches any sequence of zero or more characters (rendered as <c>%</c>).</summary>
+    public sealed class AnySequence : LikePart
+    {
+        /// <summary>Singleton instance.</summary>
+        public static readonly AnySequence Instance = new();
+    }
+
+    /// <summary>Matches a fixed run of single characters (rendered as <c>_</c> repeated <see cref="Count"/> times).</summary>
+    public sealed class AnySingle(int count) : LikePart
+    {
+        /// <summary>Number of consecutive single-character placeholders.</summary>
+        public int Count { get; } = count;
+    }
+
+    /// <summary>A literal substring. The renderer escapes any LIKE-special characters per dialect.</summary>
+    public sealed class Literal(string value) : LikePart
+    {
+        /// <summary>The unescaped literal value.</summary>
+        public string Value { get; } = value;
     }
 }
