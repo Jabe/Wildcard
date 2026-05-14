@@ -561,16 +561,16 @@ public sealed class WildcardPattern
                                 int suffixStart = input.Length - nextLit.Length;
                                 if (suffixStart < inputIdx) return false;
                                 bool endMatch = ignoreCase
-                                    ? input[suffixStart..].Equals(nextLit, StringComparison.OrdinalIgnoreCase)
-                                    : input[suffixStart..].SequenceEqual(nextLit);
+                                    ? input.Slice(suffixStart).Equals(nextLit, StringComparison.OrdinalIgnoreCase)
+                                    : input.Slice(suffixStart).SequenceEqual(nextLit);
                                 if (endMatch && capturing)
                                     starEnds![activeStarIdx] = suffixStart;
                                 return endMatch;
                             }
                             // IndexOf fast-path: jump to first occurrence of the next literal
                             int found = ignoreCase
-                                ? input[inputIdx..].IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
-                                : input[inputIdx..].IndexOf(nextLit);
+                                ? input.Slice(inputIdx).IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
+                                : input.Slice(inputIdx).IndexOf(nextLit);
                             if (found < 0) return false;
                             inputIdx += found;
                             starInputIdx = inputIdx;
@@ -605,8 +605,8 @@ public sealed class WildcardPattern
                     int searchFrom = starInputIdx + 1;
                     if (searchFrom >= input.Length) return false;
                     int found = ignoreCase
-                        ? input[searchFrom..].IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
-                        : input[searchFrom..].IndexOf(nextLit);
+                        ? input.Slice(searchFrom).IndexOf(nextLit, StringComparison.OrdinalIgnoreCase)
+                        : input.Slice(searchFrom).IndexOf(nextLit);
                     if (found < 0) return false;
                     starInputIdx = searchFrom + found;
                     inputIdx = starInputIdx;
@@ -658,16 +658,12 @@ public sealed class WildcardPattern
         if (remaining < literal.Length)
             return false;
 
-        var slice = input.Slice(inputIdx, literal.Length);
-        if (ignoreCase)
+        // Compare directly against the input span at the current position (avoids intermediate slice local)
+        if (ignoreCase
+            ? !input.Slice(inputIdx, literal.Length).Equals(literal, StringComparison.OrdinalIgnoreCase)
+            : !input.Slice(inputIdx, literal.Length).SequenceEqual(literal))
         {
-            if (!slice.Equals(literal, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-        else
-        {
-            if (!slice.SequenceEqual(literal))
-                return false;
+            return false;
         }
 
         inputIdx += literal.Length;
