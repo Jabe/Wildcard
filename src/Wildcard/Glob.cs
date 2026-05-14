@@ -317,10 +317,8 @@ public sealed class Glob
         if (Path.IsPathRooted(pattern))
             root = Path.GetPathRoot(pattern);
 
-        // Normalize separators
-        var normalized = pattern.Replace('\\', '/');
-
-        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // Split on both path separators (avoids intermediate Replace allocation)
+        var parts = pattern.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
         var segments = new List<GlobSegment>();
 
         foreach (var part in parts)
