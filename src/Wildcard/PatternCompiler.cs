@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 
 namespace Wildcard;
@@ -6,7 +7,9 @@ internal static class PatternCompiler
 {
     public static Segment[] Compile(string pattern, bool ignoreCase = false)
     {
-        var segments = new List<Segment>();
+        // Rent a pooled array — max segments can't exceed pattern length
+        var segments = ArrayPool<Segment>.Shared.Rent(pattern.Length);
+        int segCount = 0;
         var literalBuf = new StringBuilder();
         int i = 0;
 
@@ -17,22 +20,22 @@ internal static class PatternCompiler
             switch (c)
             {
                 case '*':
-                    FlushLiteral(segments, literalBuf);
+                    FlushLiteral(segments, ref segCount, literalBuf);
                     // Collapse consecutive stars
-                    if (segments.Count == 0 || segments[^1].Kind != SegmentKind.Star)
-                        segments.Add(Segment.MakeStar());
+                    if (segCount == 0 || segments[segCount - 1].Kind != SegmentKind.Star)
+                        segments[segCount++] = Segment.MakeStar();
                     i++;
                     break;
 
                 case '?':
-                    FlushLiteral(segments, literalBuf);
+                    FlushLiteral(segments, ref segCount, literalBuf);
                     int qCount = 1;
                     while (i + 1 < pattern.Length && pattern[i + 1] == '?')
                     {
                         qCount++;
                         i++;
                     }
-                    segments.Add(qCount == 1 ? Segment.MakeQuestion() : Segment.MakeQuestionRun(qCount));
+                    segments[segCount++] = qCount == 1 ? Segment.MakeQuestion() : Segment.MakeQuestionRun(qCount);
                     i++;
                     break;
 
@@ -46,8 +49,8 @@ internal static class PatternCompiler
                     }
                     else
                     {
-                        FlushLiteral(segments, literalBuf);
-                        segments.Add(ccSeg);
+                        FlushLiteral(segments, ref segCount, literalBuf);
+                        segments[segCount++] = ccSeg;
                     }
                     break;
 
@@ -68,15 +71,18 @@ internal static class PatternCompiler
             }
         }
 
-        FlushLiteral(segments, literalBuf);
-        return segments.ToArray();
+        FlushLiteral(segments, ref segCount, literalBuf);
+
+        var result = segCount == 0 ? [] : segments.AsSpan(0, segCount).ToArray();
+        ArrayPool<Segment>.Shared.Return(segments);
+        return result;
     }
 
-    private static void FlushLiteral(List<Segment> segments, StringBuilder buf)
+    private static void FlushLiteral(Segment[] segments, ref int count, StringBuilder buf)
     {
         if (buf.Length > 0)
         {
-            segments.Add(Segment.MakeLiteral(buf.ToString()));
+            segments[count++] = Segment.MakeLiteral(buf.ToString());
             buf.Clear();
         }
     }
@@ -84,7 +90,9 @@ internal static class PatternCompiler
     private static Segment ParseCharClass(string pattern, ref int i, bool ignoreCase)
     {
         bool negated = false;
-        var ranges = new List<CharRange>();
+        // Rent a pooled array — max ranges can't exceed remaining pattern length
+        var ranges = ArrayPool<CharRange>.Shared.Rent(pattern.Length - i);
+        int rangeCount = 0;
 
         if (i < pattern.Length && (pattern[i] == '!' || pattern[i] == '^'))
         {
@@ -123,16 +131,20 @@ internal static class PatternCompiler
                     hi = pattern[i + 3];
                     i++;
                 }
-                ranges.Add(new CharRange(lo, hi));
+                ranges[rangeCount++] = new CharRange(lo, hi);
                 i += 3;
             }
             else
             {
-                ranges.Add(new CharRange(c));
+                ranges[rangeCount++] = new CharRange(c);
                 i++;
             }
         }
 
-        return Segment.MakeCharClass(ranges.ToArray(), negated, ignoreCase);
+        var result = Segment.MakeCharClass(
+            rangeCount == 0 ? [] : ranges.AsSpan(0, rangeCount).ToArray(),
+            negated, ignoreCase);
+        ArrayPool<CharRange>.Shared.Return(ranges);
+        return result;
     }
 }
