@@ -16,42 +16,40 @@ internal static class BraceExpander
     /// </summary>
     public static string[] Expand(string pattern)
     {
-        var results = ExpandRecursive(pattern);
+        var results = new List<string>();
+        ExpandRecursive(pattern, results);
         return results.Count == 0 ? [pattern] : [.. results];
     }
 
-    private static List<string> ExpandRecursive(string pattern)
+    private static void ExpandRecursive(string pattern, List<string> results)
     {
         // Find the first top-level brace group (respecting escapes and char classes)
         int braceStart = FindBraceOpen(pattern);
         if (braceStart < 0)
-            return [pattern];
+        {
+            results.Add(pattern);
+            return;
+        }
 
         int braceEnd = FindBraceClose(pattern, braceStart);
         if (braceEnd < 0)
         {
             // Unmatched '{' — treat as literal
-            return [pattern];
+            results.Add(pattern);
+            return;
         }
 
         var prefix = pattern[..braceStart];
         var suffix = pattern[(braceEnd + 1)..];
         var alternatives = SplitAlternatives(pattern, braceStart + 1, braceEnd);
 
-        var results = new List<string>();
         foreach (var alt in alternatives)
         {
             // Recurse to expand remaining brace groups in (prefix + alt + suffix)
-            var expanded = ExpandRecursive(prefix + alt + suffix);
-            foreach (var e in expanded)
-            {
-                results.Add(e);
-                if (results.Count >= MaxExpansions)
-                    return results;
-            }
+            ExpandRecursive(prefix + alt + suffix, results);
+            if (results.Count >= MaxExpansions)
+                return;
         }
-
-        return results;
     }
 
     /// <summary>
