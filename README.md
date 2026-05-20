@@ -339,7 +339,7 @@ Pass `--live` to enable live mode: the server builds an in-memory index of all f
 
 ## Benchmarks
 
-Measured on Apple M4 Pro, .NET 10.0, Arm64 RyuJIT AdvSIMD. Zero allocations for all single-match operations.
+Measured on Apple M4 Pro, .NET 10.0.7, Arm64 RyuJIT AdvSIMD. Zero allocations for all single-match operations.
 
 ### Pattern Matching — Wildcard vs Compiled Regex vs FileSystemName
 
@@ -347,37 +347,37 @@ Measured on Apple M4 Pro, .NET 10.0, Arm64 RyuJIT AdvSIMD. Zero allocations for 
 |---------|-------|----------|-------|--------|-----------------|
 | `*.csv` | short (15 chars) | 1.3 ns | 13.0 ns | 4.5 ns | **10x** |
 | `*.csv` | long (74 chars) | 1.3 ns | 15.0 ns | 4.5 ns | **12x** |
-| `*.csv` | no match | 1.3 ns | 10.5 ns | 4.2 ns | **8x** |
-| `report*.csv` | short | 2.0 ns | 13.2 ns | 80.0 ns | **7x** |
-| `report_????.csv` | short | 5.2 ns | 8.8 ns | 39.1 ns | **2x** |
-| `[rs]*.*` | short | 7.5 ns | 13.2 ns | — | **2x** |
-| `*report*2024*` | short | 13.0 ns | 21.9 ns | 188.5 ns | **2x** |
-| `*report*2024*` | long | 15.2 ns | 25.6 ns | 994.3 ns | **2x** |
+| `*.csv` | no match | 1.3 ns | 10.2 ns | 4.2 ns | **8x** |
+| `report*.csv` | short | 2.4 ns | 13.3 ns | 100.7 ns | **5x** |
+| `report_????.csv` | short | 5.3 ns | 9.0 ns | 47.3 ns | **2x** |
+| `[rs]*.*` | short | 7.6 ns | 13.3 ns | — | **2x** |
+| `*report*2024*` | short | 12.7 ns | 22.0 ns | 236.7 ns | **2x** |
+| `*report*2024*` | long | 14.9 ns | 25.4 ns | 1,199.7 ns | **2x** |
 
 ### Real-World Patterns — Wildcard vs Compiled Regex
 
 | Pattern | Scenario | Wildcard | Regex | Speedup |
 |---------|----------|----------|-------|---------|
-| `v2.*` | version prefix | 0.7 ns | 8.3 ns | **11x** |
-| `[[]2024-03-15*` | log date prefix | 1.0 ns | 12.3 ns | **12x** |
-| `*@gmail.com` | email domain | 1.4 ns | 10.5 ns | **8x** |
-| `[AEIOU]*` (CI) | starts with vowel | 2.4 ns | 6.5 ns | **3x** |
-| `J* *Smith` (CI) | no match | 2.5 ns | 6.4 ns | **3x** |
-| `??? *` | 3-char first name | 3.2 ns | 6.4 ns | **2x** |
-| `SKU-*-BLUE-*` | product code | 9.5 ns | 10.3 ns | **1.1x** |
-| `J* *Smith` (CI) | match | 13.6 ns | 33.2 ns | **2x** |
-| `*@*.acme-corp.com` | corporate email | 13.7 ns | 38.5 ns | **3x** |
-| `*ERROR*timeout*` | log search (no match) | 19.2 ns | 27.9 ns | **1.5x** |
-| `*ERROR*timeout*` | log search (match) | 36.8 ns | 47.6 ns | **1.3x** |
+| `v2.*` | version prefix | 0.8 ns | 8.0 ns | **10x** |
+| `[[]2024-03-15*` | log date prefix | 1.0 ns | 8.1 ns | **8x** |
+| `*@gmail.com` | email domain | 1.5 ns | 10.0 ns | **7x** |
+| `[AEIOU]*` (CI) | starts with vowel | 2.4 ns | 6.2 ns | **3x** |
+| `??? *` | 3-char first name | 3.0 ns | 6.2 ns | **2x** |
+| `J* *Smith` (CI) | no match | 4.5 ns | 6.2 ns | **1.4x** |
+| `*ERROR*timeout*` | log search (no match) | 6.9 ns | 8.2 ns | **1.2x** |
+| `*@*.acme-corp.com` | corporate email | 7.7 ns | 15.6 ns | **2x** |
+| `SKU-*-BLUE-*` | product code | 9.3 ns | 10.1 ns | **1.1x** |
+| `J* *Smith` (CI) | match | 10.3 ns | 14.7 ns | **1.4x** |
+| `*ERROR*timeout*` | log search (match) | 15.3 ns | 20.0 ns | **1.3x** |
 
 ### Bulk Filtering — 10,000 Items
 
 | Method | Mean | Allocated |
 |--------|------|-----------|
-| Wildcard FilterLines | 33 µs | 33 KB |
-| Wildcard FilterBulk (parallel) | 61 µs | 174 KB |
-| FSName LINQ filter | 68 µs | 10 KB |
-| Regex LINQ filter | 198 µs | 11 KB |
+| Wildcard FilterLines | 34 µs | 33 KB |
+| Wildcard FilterBulk (parallel) | 79 µs | 174 KB |
+| FSName LINQ filter | 67 µs | 10 KB |
+| Regex LINQ filter | 200 µs | 11 KB |
 
 ### File Content Scanning — `FilePathMatcher`
 
@@ -385,9 +385,9 @@ Pattern `*ERROR*` across 4 log files (~12.5% matching lines). Compared against `
 
 | File size | Baseline (ReadAllLines) | FilePathMatcher | Ratio | Alloc Ratio |
 |-----------|------------------------|-----------------|-------|-------------|
-| small (1K lines) | 279 µs | 79 µs | 0.29 | 0.15 |
-| medium (100K lines) | 52,811 µs | 7,796 µs | 0.15 | 0.15 |
-| large (1M lines) | 558,834 µs | 110,174 µs | 0.20 | 0.15 |
+| small (1K lines) | 271 µs | 73 µs | 0.27 | 0.15 |
+| medium (100K lines) | 52,220 µs | 7,626 µs | 0.15 | 0.15 |
+| large (1M lines) | 559,739 µs | 108,121 µs | 0.19 | 0.15 |
 
 ### CLI — `wcg` vs `find+grep`, `ripgrep`
 
