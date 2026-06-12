@@ -7,10 +7,10 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class ReplaceTool
 {
-    [McpServerTool(Name = "wildcard_replace"), Description("sed wishes it could. Find-and-replace across files with glob patterns — dry-run preview by default, atomic writes, capture groups ($1/$2). Way safer than regex-in-bash. Set dry_run=false to actually write.")]
+    [McpServerTool(Name = "wildcard_replace"), Description("sed wishes it could. Find-and-replace across files with glob patterns — dry-run preview by default, atomic writes, capture groups ($1/$2). Way safer than regex-in-bash. Supports multi-line literal find text for surgical code edits. Set dry_run=false to actually write.")]
     public static async Task<string> Replace(
         [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
-        [Description("Text to find — plain string for literal match, or wildcard pattern with * ? [] for capture-group replacement")] string find,
+        [Description("Text to find — plain string for literal match, or wildcard pattern with * ? [] for capture-group replacement. May span multiple lines; find text containing newlines is always matched literally (wildcards cannot span lines) and line endings are normalized to each file's style.")] string find,
         [Description("Replacement text (use $1, $2 for capture groups when find contains wildcards)")] string replace,
         [Description("Base directory to search in (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Exclude files matching these glob patterns")] string[]? exclude_paths = null,
@@ -38,22 +38,34 @@ public static class ReplaceTool
 
         return await Task.Run(() =>
         {
-            // Normalize find pattern for file matching (auto-wrap plain words as *word*)
-            var normalizedFind = NormalizeContentPattern(find);
+            // Multi-line find text is matched literally against whole file content;
+            // the line-based FilePathMatcher can't pre-filter it, so use FileReplacer directly.
+            bool multiLineFind = find.Contains('\n');
+
+            FilePathMatcher? matcher = null;
+            if (!multiLineFind)
+            {
+                // Normalize find pattern for file matching (auto-wrap plain words as *word*)
+                var normalizedFind = NormalizeContentPattern(find);
+                matcher = FilePathMatcher.Create(
+                    include: [normalizedFind],
+                    options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
+            }
+
+            bool ContainsFind(string file) => multiLineFind
+                ? FileReplacer.ContainsLiteralMatch(file, find, ignore_case)
+                : matcher!.ContainsMatch(file);
 
             WildcardPattern[]? excludePathPatterns = null;
             if (exclude_paths is { Length: > 0 })
                 excludePathPatterns = exclude_paths.Select(p => WildcardPattern.Compile(p)).ToArray();
-
-            var matcher = FilePathMatcher.Create(
-                include: [normalizedFind],
-                options: ignore_case ? new FilePathMatcher.Options { IgnoreCase = true } : null);
 
             // Use index when available and options match indexed state
             var activeIndex = index is not null && respect_gitignore && !follow_symlinks ? index : null;
 
             // Find files with matches
             var matchingFiles = new List<string>();
+            int globMatchedFiles = 0;
 
             if (activeIndex is not null)
             {
@@ -61,7 +73,8 @@ public static class ReplaceTool
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (matchingFiles.Count >= limit) break;
-                    if (matcher.ContainsMatch(file))
+                    globMatchedFiles++;
+                    if (ContainsFind(file))
                         matchingFiles.Add(file);
                 }
             }
@@ -73,13 +86,18 @@ public static class ReplaceTool
                     if (matchingFiles.Count >= limit) break;
                     var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
                     if (IsPathExcluded(relPath, excludePathPatterns)) continue;
-                    if (matcher.ContainsMatch(file))
+                    globMatchedFiles++;
+                    if (ContainsFind(file))
                         matchingFiles.Add(file);
                 }
             }
 
             if (matchingFiles.Count == 0)
-                return "No matching files found.";
+            {
+                return globMatchedFiles == 0
+                    ? $"No files matched pattern '{pattern}'."
+                    : $"{globMatchedFiles} file{(globMatchedFiles > 1 ? "s" : "")} matched pattern '{pattern}', but none contained the find text.";
+            }
 
             // Run replacement
             var results = dry_run
@@ -97,7 +115,7 @@ public static class ReplaceTool
             }
 
             if (results.Count == 0)
-                return "No replacements found.";
+                return $"{matchingFiles.Count} file{(matchingFiles.Count > 1 ? "s" : "")} contained the find text, but no replacements were produced (replacement may be identical to the original).";
 
             var sb = new StringBuilder();
             int totalReplacements = 0;
@@ -122,19 +140,24 @@ public static class ReplaceTool
                 totalReplacements += result.Replacements.Count;
 
                 var relPath2 = Path.GetRelativePath(baseDir, result.FilePath).Replace('\\', '/');
-                int width = result.Replacements[^1].LineNumber.ToString().Length;
+                var lastReplacement = result.Replacements[^1];
+                int lastLine = lastReplacement.LineNumber
+                    + Math.Max(CountLines(lastReplacement.OriginalLine), CountLines(lastReplacement.ReplacedLine)) - 1;
+                int width = lastLine.ToString().Length;
 
                 if (anyOutput)
                     sb.AppendLine();
                 anyOutput = true;
 
-                sb.AppendLine($"{relPath2} ({result.Replacements.Count} replacement{(result.Replacements.Count > 1 ? "s" : "")})");
+                var lineEndingNote = result.NormalizedLineEnding is null
+                    ? ""
+                    : $", line endings normalized to {(result.NormalizedLineEnding == "\r\n" ? "CRLF" : "LF")} to match file";
+                sb.AppendLine($"{relPath2} ({result.Replacements.Count} replacement{(result.Replacements.Count > 1 ? "s" : "")}{lineEndingNote})");
 
                 foreach (var r in result.Replacements)
                 {
-                    var lineNum = r.LineNumber.ToString().PadLeft(width);
-                    sb.AppendLine($"  {lineNum}: - {r.OriginalLine}");
-                    sb.AppendLine($"  {lineNum}: + {r.ReplacedLine}");
+                    AppendDiffLines(sb, r.LineNumber, r.OriginalLine, '-', width);
+                    AppendDiffLines(sb, r.LineNumber, r.ReplacedLine, '+', width);
                 }
             }
 
@@ -149,6 +172,28 @@ public static class ReplaceTool
 
             return sb.ToString();
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Appends diff-style output for a replacement block. Single-line text emits one line;
+    /// multi-line text emits one line per content line with sequential line numbers.
+    /// </summary>
+    private static void AppendDiffLines(StringBuilder sb, int startLine, string text, char sign, int width)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lineNum = (startLine + i).ToString().PadLeft(width);
+            sb.AppendLine($"  {lineNum}: {sign} {lines[i]}");
+        }
+    }
+
+    private static int CountLines(string text)
+    {
+        int count = 1;
+        foreach (var c in text)
+            if (c == '\n') count++;
+        return count;
     }
 
     private static string NormalizeContentPattern(string pattern)

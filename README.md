@@ -163,6 +163,10 @@ FileReplacer.Apply(filePaths, "ERROR", "WARNING", ignoreCase: true);
 
 // Capture-group replacement — wildcards in find, $1/$2 in replace
 var results = FileReplacer.Preview(filePaths, "*console.log(*)*", "$1logger.info($2)$3");
+
+// Multi-line literal find — always matched literally (wildcards can't span lines);
+// line endings in find/replace are normalized to each file's own style
+FileReplacer.Apply(filePaths, "    DoOld();\n    DoOld2();", "    DoNew();");
 ```
 
 Safety: skips binary files, read-only files, and files over 10MB. Preserves encoding (BOM) and line endings (`\r\n`/`\n`). Writes atomically via temp file + rename. If a file fails (permissions, locked), the error is reported and the remaining files continue processing.
@@ -292,7 +296,7 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 |------|-------------|
 | `wildcard_glob` | Find files by glob pattern — respects `.gitignore`, supports count mode and tree output |
 | `wildcard_grep` | Search file contents with context lines, count mode, AND/OR mode, output caps, and parallel memory-mapped I/O. Also acts as a cross-platform file reader (cat/head) |
-| `wildcard_replace` | Find-and-replace across files — dry-run preview by default, atomic writes, capture groups |
+| `wildcard_replace` | Find-and-replace across files — dry-run preview by default, atomic writes, capture groups, multi-line literal find |
 | `wildcard_peek` | Batch file reader — read multiple files in one call with optional line ranges and a character budget |
 | `wildcard_watch` | Watch for file changes matching a glob pattern for a bounded duration |
 
