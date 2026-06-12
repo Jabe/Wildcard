@@ -7,6 +7,7 @@ using Wildcard.Mcp;
 ThreadPool.SetMinThreads(Environment.ProcessorCount * 2, Environment.ProcessorCount);
 
 bool live = args.Contains("--live");
+bool summary = args.Contains("--summary");
 
 var builder = Host.CreateEmptyApplicationBuilder(settings: null);
 
@@ -26,7 +27,12 @@ builder.Services
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly()
-    .WithRequestFilters(filters => filters.AddCallToolFilter(StrictArgumentsFilter.Apply));
+    .WithRequestFilters(filters =>
+    {
+        filters.AddCallToolFilter(StrictArgumentsFilter.Apply);
+        if (summary)
+            filters.AddCallToolFilter(ArgSummaryFilter.Apply);
+    });
 
 var host = builder.Build();
 

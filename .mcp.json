@@ -2,7 +2,7 @@
   "mcpServers": {
     "wildcard-dev": {
       "command": "dotnet",
-      "args": ["run", "--project", "src/Wildcard.Mcp/Wildcard.Mcp.csproj", "--", "--live"]
+      "args": ["run", "--project", "src/Wildcard.Mcp/Wildcard.Mcp.csproj", "--", "--live", "--summary"]
     }
   }
 }

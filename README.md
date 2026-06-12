@@ -341,6 +341,8 @@ The server communicates over stdio and auto-discovers all five tools. All operat
 
 Pass `--live` to enable live mode: the server builds an in-memory index of all files (one per root) at startup and keeps it current via filesystem watcher. Glob queries become an in-memory filter instead of a disk walk, which dramatically speeds up repeated searches on large codebases.
 
+Pass `--summary` to prepend a one-line echo of the call arguments to each tool result, e.g. `[pattern="**/*.cs", ignore_case=true]`. Only arguments the client actually sent appear (defaults stay out), so you can audit what the LLM passed without opening the raw request. Off by default.
+
 ## Benchmarks
 
 Measured on Apple M4 Pro, .NET 10.0.7, Arm64 RyuJIT AdvSIMD. Zero allocations for all single-match operations.
