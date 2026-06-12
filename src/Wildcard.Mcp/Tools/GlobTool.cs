@@ -43,7 +43,7 @@ public static class GlobTool
             }
 
             if (matched == 0)
-                return "No files found.";
+                return NoFilesMessage(pattern, respect_gitignore);
             if (count)
                 return $"{matched} file{(matched > 1 ? "s" : "")} found.";
             if (tree)
@@ -112,7 +112,7 @@ public static class GlobTool
         await producer;
 
         if (matched2 == 0)
-            return "No files found.";
+            return NoFilesMessage(pattern, respect_gitignore);
 
         if (count)
             return $"{matched2} file{(matched2 > 1 ? "s" : "")} found.";
@@ -132,4 +132,9 @@ public static class GlobTool
 
         return sb2.ToString();
     }
+
+    private static string NoFilesMessage(string pattern, bool respectGitignore) =>
+        respectGitignore
+            ? $"No files matched pattern '{pattern}'. {ToolHints.GitignoreActive}"
+            : $"No files matched pattern '{pattern}'.";
 }

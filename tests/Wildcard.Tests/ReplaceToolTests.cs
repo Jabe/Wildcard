@@ -126,6 +126,40 @@ public class ReplaceToolTests : IDisposable
         Assert.Contains("none contained the find text", result);
     }
 
+    [Fact]
+    public async Task NoGlobMatch_WithGitignore_AppendsHint()
+    {
+        var result = await ReplaceTool.Replace("does/not/exist/*.xyz", "foo", "bar",
+            rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: true);
+
+        Assert.Contains("No files matched pattern", result);
+        Assert.Contains(".gitignore was respected", result);
+    }
+
+    [Fact]
+    public async Task NoContentMatch_PipeInFind_AppendsAlternationHint()
+    {
+        CreateFile("a.txt", "hello\n");
+
+        var result = await ReplaceTool.Replace("*.txt", "foo|bar", "x",
+            rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false);
+
+        Assert.Contains("none contained the find text", result);
+        Assert.Contains("'|' is matched literally", result);
+    }
+
+    [Fact]
+    public async Task PipeInFind_WithMatch_NoHint()
+    {
+        CreateFile("a.txt", "a |b here\n");
+
+        var result = await ReplaceTool.Replace("*.txt", "a |b", "c",
+            rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false);
+
+        Assert.Contains("1 replacement", result);
+        Assert.DoesNotContain("matched literally", result);
+    }
+
     // --- Multi-line literal find ---
 
     [Fact]

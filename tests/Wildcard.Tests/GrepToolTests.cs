@@ -180,6 +180,90 @@ public class GrepToolTests : IDisposable
         Assert.Contains("more matches in this file", result);
     }
 
+    // --- empty-result messages (glob miss vs content miss, hints) ---
+
+    [Fact]
+    public async Task EmptyResult_GlobMiss_NamesPattern()
+    {
+        CreateFile("a.txt", "hello\n");
+
+        var result = await GrepTool.Grep("does/not/exist/*.xyz", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            content_patterns: ["hello"]);
+
+        Assert.Contains("No files matched pattern 'does/not/exist/*.xyz'", result);
+        Assert.DoesNotContain(".gitignore was respected", result);
+    }
+
+    [Fact]
+    public async Task EmptyResult_GlobMiss_WithGitignore_AppendsHint()
+    {
+        CreateFile("a.txt", "hello\n");
+
+        var result = await GrepTool.Grep("does/not/exist/*.xyz", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: true,
+            content_patterns: ["hello"]);
+
+        Assert.Contains("No files matched pattern", result);
+        Assert.Contains(".gitignore was respected", result);
+    }
+
+    [Fact]
+    public async Task EmptyResult_ContentMiss_ReportsFileCount()
+    {
+        CreateFile("a.txt", "hello\n");
+        CreateFile("b.txt", "world\n");
+
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            content_patterns: ["NOTFOUND"]);
+
+        Assert.Contains("2 files matched pattern '*.txt'", result);
+        Assert.Contains("no lines matched the content pattern", result);
+    }
+
+    [Fact]
+    public async Task EmptyResult_ContentMiss_FilesOnlyMode_SameMessage()
+    {
+        CreateFile("a.txt", "hello\n");
+
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            content_patterns: ["NOTFOUND"], files_only: true);
+
+        Assert.Contains("1 file matched pattern '*.txt'", result);
+        Assert.Contains("no lines matched", result);
+    }
+
+    [Fact]
+    public async Task EmptyResult_PipeInPattern_AppendsAlternationHint()
+    {
+        CreateFile("a.txt", "hello\n");
+
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            content_patterns: ["foo|bar"]);
+
+        Assert.Contains("'|' is matched literally", result);
+        Assert.Contains("pass multiple content_patterns for OR", result);
+    }
+
+    [Fact]
+    public async Task PipeInPattern_WithHits_NoHint()
+    {
+        CreateFile("a.txt", "if (a |b) then\n");
+
+        var result = await GrepTool.Grep("*.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            content_patterns: ["a |b"]);
+
+        Assert.Contains("a |b", result);
+        Assert.DoesNotContain("matched literally", result);
+    }
+
+    [Fact]
+    public async Task EmptyResult_ReaderMode_NamesPattern()
+    {
+        var result = await GrepTool.Grep("missing.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            read_lines: 10);
+
+        Assert.Contains("No files matched pattern 'missing.txt'", result);
+    }
+
     // --- count mode with allOf ---
 
     [Fact]

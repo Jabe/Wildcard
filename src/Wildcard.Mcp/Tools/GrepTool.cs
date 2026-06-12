@@ -49,11 +49,16 @@ public static class GrepTool
         // Use index when available and options match indexed state
         var activeIndex = index is not null && respect_gitignore && !follow_symlinks ? index : null;
 
+        // Replaces the generic zero-hit sentinels with messages that distinguish
+        // "glob matched nothing" from "files matched but content didn't", plus hints
+        string Enrich(string result) => EnrichEmptyResult(result, pattern, baseDir, globOptions,
+            excludePathPatterns, activeIndex, exclude_paths, content_patterns, respect_gitignore, cancellationToken);
+
         // File reader mode: no content patterns, read_lines > 0
         if (content_patterns is null or { Length: 0 })
         {
             int lines = read_lines > 0 ? read_lines : 200;
-            return await Task.Run(() => RunReadLines(pattern, baseDir, globOptions, excludePathPatterns, lines, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return Enrich(await Task.Run(() => RunReadLines(pattern, baseDir, globOptions, excludePathPatterns, lines, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken));
         }
 
         // Normalize content patterns: plain words become *word* for substring matching
@@ -78,21 +83,84 @@ public static class GrepTool
 
         // read_lines mode with content patterns: expanded context around matches
         if (read_lines > 0)
-            return await Task.Run(() => RunReadLinesWithMatches(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, read_lines, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return Enrich(await Task.Run(() => RunReadLinesWithMatches(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, read_lines, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken));
 
         if (count)
-            return await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, files_only, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return Enrich(await Task.Run(() => RunCountSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, files_only, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken));
 
         if (files_only)
-            return await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return Enrich(await Task.Run(() => RunFilesOnly(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, activeIndex, exclude_paths, cancellationToken), cancellationToken));
 
         int resolvedBefore = before_context > 0 ? before_context : context;
         int resolvedAfter = after_context > 0 ? after_context : context;
 
         if (resolvedBefore > 0 || resolvedAfter > 0)
-            return await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, resolvedBefore, resolvedAfter, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+            return Enrich(await Task.Run(() => RunContentSearchWithContext(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, resolvedBefore, resolvedAfter, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken));
 
-        return await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken);
+        return Enrich(await Task.Run(() => RunContentSearch(pattern, baseDir, globOptions, matcher, allOfMatchers, excludePathPatterns, limit, max_files, max_matches_per_file, activeIndex, exclude_paths, cancellationToken), cancellationToken));
+    }
+
+    /// <summary>
+    /// Rewrites the generic zero-hit sentinels emitted by the Run methods into messages
+    /// that distinguish "no files matched the glob" from "files matched but the content
+    /// didn't", appending targeted hints. Runs a bounded glob re-enumeration (no content
+    /// scan) only on the zero-hit path, so the common case pays nothing.
+    /// </summary>
+    private static string EnrichEmptyResult(string result, string pattern, string baseDir,
+        GlobOptions globOptions, WildcardPattern[]? excludePathPatterns,
+        WorkspaceIndex? index, string[]? excludePathStrings,
+        string[]? contentPatterns, bool respectGitignore, CancellationToken cancellationToken)
+    {
+        if (result is not ("No matches found." or "No matching files found." or "No files found."))
+            return result;
+
+        const int countCap = 1000;
+        int globMatches = CountGlobMatches(pattern, baseDir, globOptions, excludePathPatterns,
+            index, excludePathStrings, countCap, cancellationToken);
+
+        var sb = new StringBuilder();
+        if (globMatches == 0)
+        {
+            sb.Append($"No files matched pattern '{pattern}'.");
+            if (respectGitignore)
+                sb.Append(' ').Append(ToolHints.GitignoreActive);
+        }
+        else
+        {
+            var fileCount = globMatches >= countCap ? $"{countCap}+" : globMatches.ToString();
+            sb.Append($"{fileCount} file{(globMatches > 1 ? "s" : "")} matched pattern '{pattern}', but no lines matched the content pattern{(contentPatterns is { Length: > 1 } ? "s" : "")}.");
+            if (contentPatterns is not null && contentPatterns.Any(p => p is not null && p.Contains('|')))
+                sb.Append(' ').Append(ToolHints.PipeInPattern);
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Counts files matching the glob (no content scan), capped for cheapness.</summary>
+    private static int CountGlobMatches(string pattern, string baseDir, GlobOptions globOptions,
+        WildcardPattern[]? excludePathPatterns, WorkspaceIndex? index, string[]? excludePathStrings,
+        int cap, CancellationToken cancellationToken)
+    {
+        int matches = 0;
+        if (index is not null)
+        {
+            foreach (var _ in index.MatchGlob(pattern, baseDir, excludePathStrings))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (++matches >= cap) break;
+            }
+        }
+        else
+        {
+            foreach (var file in Wildcard.Glob.Match(pattern, baseDir, globOptions))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var relPath = Path.GetRelativePath(baseDir, file).Replace('\\', '/');
+                if (IsPathExcluded(relPath, excludePathPatterns)) continue;
+                if (++matches >= cap) break;
+            }
+        }
+        return matches;
     }
 
     /// <summary>

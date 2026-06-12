@@ -79,7 +79,17 @@ public class GlobToolTests : IDisposable
     {
         var result = await GlobTool.Glob("**/*.nonexistent", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, tree: true, respect_gitignore: false);
 
-        Assert.Contains("No files found", result);
+        Assert.Contains("No files matched pattern '**/*.nonexistent'", result);
+        Assert.DoesNotContain(".gitignore was respected", result);
+    }
+
+    [Fact]
+    public async Task EmptyResult_WithGitignoreActive_AppendsHint()
+    {
+        var result = await GlobTool.Glob("**/*.nonexistent", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: true);
+
+        Assert.Contains("No files matched pattern", result);
+        Assert.Contains(".gitignore was respected", result);
     }
 
     [Fact]

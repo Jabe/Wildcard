@@ -94,9 +94,17 @@ public static class ReplaceTool
 
             if (matchingFiles.Count == 0)
             {
-                return globMatchedFiles == 0
-                    ? $"No files matched pattern '{pattern}'."
-                    : $"{globMatchedFiles} file{(globMatchedFiles > 1 ? "s" : "")} matched pattern '{pattern}', but none contained the find text.";
+                if (globMatchedFiles == 0)
+                {
+                    return respect_gitignore
+                        ? $"No files matched pattern '{pattern}'. {ToolHints.GitignoreActive}"
+                        : $"No files matched pattern '{pattern}'.";
+                }
+
+                var message = $"{globMatchedFiles} file{(globMatchedFiles > 1 ? "s" : "")} matched pattern '{pattern}', but none contained the find text.";
+                if (!multiLineFind && find.Contains('|'))
+                    message += $" {ToolHints.PipeInFind}";
+                return message;
             }
 
             // Run replacement
