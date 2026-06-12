@@ -21,11 +21,12 @@ builder.Services
         options.ServerInfo = new()
         {
             Name = "wildcard",
-            Version = "0.1.0",
+            Version = typeof(RootsProvider).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
         };
     })
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly()
+    .WithRequestFilters(filters => filters.AddCallToolFilter(StrictArgumentsFilter.Apply));
 
 var host = builder.Build();
 
