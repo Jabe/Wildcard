@@ -434,4 +434,123 @@ public class FileReplacerTests : IDisposable
             File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
     }
+
+    // --- Multi-line literal find ---
+
+    [Fact]
+    public void Preview_MultiLineLiteral_FindsReplacement()
+    {
+        var file = CreateFile("multi.cs", "alpha\nbeta\ngamma\ndelta\n");
+        var results = FileReplacer.Preview([file], "beta\ngamma", "BETA\nGAMMA\nEXTRA");
+
+        Assert.Single(results);
+        Assert.Single(results[0].Replacements);
+        var r = results[0].Replacements[0];
+        Assert.Equal(2, r.LineNumber);
+        Assert.Equal("beta\ngamma", r.OriginalLine);
+        Assert.Equal("BETA\nGAMMA\nEXTRA", r.ReplacedLine);
+
+        // Preview must not modify the file
+        Assert.Equal("alpha\nbeta\ngamma\ndelta\n", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public void Apply_MultiLineLiteral_WritesChanges()
+    {
+        var file = CreateFile("multi.cs", "alpha\nbeta\ngamma\ndelta\n");
+        var results = FileReplacer.Apply([file], "beta\ngamma", "REPLACED");
+
+        Assert.Single(results);
+        Assert.Equal("alpha\nREPLACED\ndelta\n", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public void Apply_MultiLineLiteral_LfFind_MatchesCrlfFile()
+    {
+        var file = Path.Combine(_tempDir, "crlf_multi.cs");
+        File.WriteAllText(file, "alpha\r\nbeta\r\ngamma\r\ndelta\r\n", new UTF8Encoding(false));
+
+        var results = FileReplacer.Apply([file], "beta\ngamma", "one\ntwo");
+
+        Assert.Single(results);
+        Assert.Equal("alpha\r\none\r\ntwo\r\ndelta\r\n", File.ReadAllText(file));
+        Assert.Equal("\r\n", results[0].NormalizedLineEnding);
+    }
+
+    [Fact]
+    public void Apply_MultiLineLiteral_MatchingLineEndings_NoNormalizationFlag()
+    {
+        var file = CreateFile("multi.cs", "alpha\nbeta\ngamma\n");
+        var results = FileReplacer.Apply([file], "alpha\nbeta", "one\ntwo");
+
+        Assert.Single(results);
+        Assert.Null(results[0].NormalizedLineEnding);
+    }
+
+    [Fact]
+    public void Preview_MultiLineLiteral_NoMatch_ReturnsEmpty()
+    {
+        var file = CreateFile("multi.cs", "alpha\nbeta\n");
+        var results = FileReplacer.Preview([file], "beta\nNOTTHERE", "x");
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Preview_MultiLineLiteral_WildcardCharsAreLiteral()
+    {
+        var file = CreateFile("multi.cs", "int a; /* note */\nint[] b = arr[0];\n");
+        var results = FileReplacer.Preview([file], "/* note */\nint[] b = arr[0];", "int b;");
+
+        Assert.Single(results);
+        Assert.Single(results[0].Replacements);
+        Assert.Equal("int b;", results[0].Replacements[0].ReplacedLine);
+    }
+
+    [Fact]
+    public void Preview_MultiLineLiteral_CaseInsensitive()
+    {
+        var file = CreateFile("multi.cs", "Alpha\nBETA\ngamma\n");
+        var results = FileReplacer.Preview([file], "alpha\nbeta", "x\ny", ignoreCase: true);
+
+        Assert.Single(results);
+        Assert.Equal("Alpha\nBETA", results[0].Replacements[0].OriginalLine);
+    }
+
+    [Fact]
+    public void Apply_MultiLineLiteral_MultipleOccurrences_LineNumbersCorrect()
+    {
+        var file = CreateFile("multi.cs", "one\ntwo\nfiller\none\ntwo\nend\n");
+        var results = FileReplacer.Apply([file], "one\ntwo", "merged");
+
+        Assert.Single(results);
+        Assert.Equal(2, results[0].Replacements.Count);
+        Assert.Equal(1, results[0].Replacements[0].LineNumber);
+        Assert.Equal(4, results[0].Replacements[1].LineNumber);
+        Assert.Equal("merged\nfiller\nmerged\nend\n", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public void Apply_MultiLineLiteral_NoOpReplacement_ReturnsEmpty()
+    {
+        var content = "alpha\nbeta\ngamma\n";
+        var file = CreateFile("multi.cs", content);
+        var results = FileReplacer.Apply([file], "alpha\nbeta", "alpha\nbeta");
+
+        Assert.Empty(results);
+        Assert.Equal(content, File.ReadAllText(file));
+    }
+
+    // --- ContainsLiteralMatch ---
+
+    [Fact]
+    public void ContainsLiteralMatch_MultiLine_MatchesAcrossLineEndings()
+    {
+        var lf = CreateFile("lf.cs", "alpha\nbeta\ngamma\n");
+        var crlf = Path.Combine(_tempDir, "crlf.cs");
+        File.WriteAllText(crlf, "alpha\r\nbeta\r\ngamma\r\n", new UTF8Encoding(false));
+
+        Assert.True(FileReplacer.ContainsLiteralMatch(lf, "beta\ngamma"));
+        Assert.True(FileReplacer.ContainsLiteralMatch(crlf, "beta\ngamma"));
+        Assert.False(FileReplacer.ContainsLiteralMatch(lf, "beta\nNOTTHERE"));
+    }
 }

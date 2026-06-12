@@ -5,14 +5,20 @@ namespace Wildcard;
 /// <summary>
 /// Find-and-replace engine for files on disk.
 /// Supports literal replacement and capture-group replacement via wildcard patterns.
+/// Find text containing newlines is always matched literally (wildcards cannot span lines);
+/// its line endings are normalized to each file's own style before matching.
 /// </summary>
 public static class FileReplacer
 {
     /// <summary>A single line replacement within a file.</summary>
     public readonly record struct LineReplacement(int LineNumber, string OriginalLine, string ReplacedLine);
 
-    /// <summary>Replacement results for a single file.</summary>
-    public readonly record struct FileResult(string FilePath, List<LineReplacement> Replacements, string? Error = null);
+    /// <summary>
+    /// Replacement results for a single file.
+    /// <paramref name="NormalizedLineEnding"/> is non-null when the find/replace text's line
+    /// endings were converted to match the file's style; it holds the file's line ending.
+    /// </summary>
+    public readonly record struct FileResult(string FilePath, List<LineReplacement> Replacements, string? Error = null, string? NormalizedLineEnding = null);
 
     private const int MaxFileSizeBytes = 10 * 1024 * 1024; // 10MB
     private const int BinaryCheckBytes = 8192;
@@ -82,8 +88,34 @@ public static class FileReplacer
         return results;
     }
 
+    /// <summary>
+    /// Returns true if the file contains the literal find text at least once.
+    /// Multi-line find text is matched against the whole file content with
+    /// line endings normalized to the file's own style.
+    /// </summary>
+    public static bool ContainsLiteralMatch(string filePath, string find, bool ignoreCase = false)
+    {
+        ArgumentNullException.ThrowIfNull(find);
+        if (find.Length == 0) return false;
+
+        if (!CanProcessFile(filePath))
+            return false;
+
+        var (content, _) = ReadFileRaw(filePath);
+        if (content is null)
+            return false;
+
+        var lineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
+        var normalizedFind = NormalizeLineEndings(find, lineEnding);
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return content.Contains(normalizedFind, comparison);
+    }
+
     internal static FileResult ComputeReplacements(string filePath, string find, string replace, bool ignoreCase)
     {
+        if (find.Contains('\n'))
+            return ReplaceMultiLine(filePath, find, replace, ignoreCase, write: false);
+
         var empty = new FileResult(filePath, []);
 
         if (!CanProcessFile(filePath))
@@ -125,6 +157,9 @@ public static class FileReplacer
 
     private static FileResult ApplyToFile(string filePath, string find, string replace, bool ignoreCase)
     {
+        if (find.Contains('\n'))
+            return ReplaceMultiLine(filePath, find, replace, ignoreCase, write: true);
+
         var empty = new FileResult(filePath, []);
 
         if (!CanProcessFile(filePath))
@@ -172,6 +207,66 @@ public static class FileReplacer
         return new FileResult(filePath, replacements);
     }
 
+    /// <summary>
+    /// Literal whole-content replacement for find text spanning multiple lines.
+    /// Each replacement's OriginalLine/ReplacedLine hold the full (multi-line) matched
+    /// and replacement text; LineNumber is the 1-based line where the match starts.
+    /// </summary>
+    private static FileResult ReplaceMultiLine(string filePath, string find, string replace, bool ignoreCase, bool write)
+    {
+        var empty = new FileResult(filePath, []);
+
+        if (!CanProcessFile(filePath))
+            return empty;
+
+        var (content, encoding) = ReadFileRaw(filePath);
+        if (content is null)
+            return empty;
+
+        var lineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
+        var normalizedFind = NormalizeLineEndings(find, lineEnding);
+        var normalizedReplace = NormalizeLineEndings(replace, lineEnding);
+        string? normalizedLineEnding = normalizedFind != find || normalizedReplace != replace ? lineEnding : null;
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        var replacements = new List<LineReplacement>();
+        var sb = write ? new StringBuilder(content.Length) : null;
+
+        int pos = 0;
+        while (pos < content.Length)
+        {
+            int idx = content.IndexOf(normalizedFind, pos, comparison);
+            if (idx < 0) break;
+
+            var original = content.Substring(idx, normalizedFind.Length);
+            if (original != normalizedReplace)
+            {
+                int lineNumber = content.AsSpan(0, idx).Count('\n') + 1;
+                replacements.Add(new LineReplacement(lineNumber, original, normalizedReplace));
+            }
+
+            sb?.Append(content, pos, idx - pos).Append(normalizedReplace);
+            pos = idx + normalizedFind.Length;
+        }
+
+        if (replacements.Count == 0)
+            return empty;
+
+        if (write)
+        {
+            sb!.Append(content, pos, content.Length - pos);
+            WriteFileAtomic(filePath, sb.ToString(), encoding);
+        }
+
+        return new FileResult(filePath, replacements, NormalizedLineEnding: normalizedLineEnding);
+    }
+
+    private static string NormalizeLineEndings(string text, string lineEnding)
+    {
+        var unified = text.Replace("\r\n", "\n");
+        return lineEnding == "\n" ? unified : unified.Replace("\n", lineEnding);
+    }
+
     private static bool CanProcessFile(string filePath)
     {
         var fileInfo = new FileInfo(filePath);
@@ -211,31 +306,34 @@ public static class FileReplacer
 
     private static (string[]? Lines, Encoding Encoding, string LineEnding) ReadFile(string filePath)
     {
+        var (content, encoding) = ReadFileRaw(filePath);
+        if (content is null)
+            return (null, encoding, "\n");
+
+        // Detect line ending style
+        string lineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
+
+        // Split into lines
+        var lines = content.Split(lineEnding);
+
+        return (lines, encoding, lineEnding);
+    }
+
+    private static (string? Content, Encoding Encoding) ReadFileRaw(string filePath)
+    {
         try
         {
-            Encoding encoding;
-            string content;
-            using (var reader = new StreamReader(filePath, detectEncodingFromByteOrderMarks: true))
-            {
-                content = reader.ReadToEnd();
-                encoding = reader.CurrentEncoding;
-            }
-
-            // Detect line ending style
-            string lineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
-
-            // Split into lines
-            var lines = content.Split(lineEnding);
-
-            return (lines, encoding, lineEnding);
+            using var reader = new StreamReader(filePath, detectEncodingFromByteOrderMarks: true);
+            var content = reader.ReadToEnd();
+            return (content, reader.CurrentEncoding);
         }
         catch (IOException)
         {
-            return (null, Encoding.UTF8, "\n");
+            return (null, Encoding.UTF8);
         }
         catch (UnauthorizedAccessException)
         {
-            return (null, Encoding.UTF8, "\n");
+            return (null, Encoding.UTF8);
         }
     }
 
