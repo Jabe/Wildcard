@@ -95,6 +95,30 @@ public class FileReplacerTests : IDisposable
     }
 
     [Fact]
+    public void Apply_DoesNotAddBom_ToBomlessFile()
+    {
+        var file = CreateFile("nobom.txt", "ERROR line\nOK line\n"); // UTF8Encoding(false) — no BOM
+
+        FileReplacer.Apply([file], "ERROR", "WARNING");
+
+        var bytes = File.ReadAllBytes(file);
+        Assert.False(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
+        Assert.Contains("WARNING line", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public void Apply_MultiLine_DoesNotAddBom_ToBomlessFile()
+    {
+        var file = CreateFile("nobom_multi.txt", "alpha\nbeta\ngamma\n");
+
+        FileReplacer.Apply([file], "alpha\nbeta", "one\ntwo");
+
+        var bytes = File.ReadAllBytes(file);
+        Assert.False(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
+        Assert.Equal("one\ntwo\ngamma\n", File.ReadAllText(file));
+    }
+
+    [Fact]
     public void Apply_PreservesLineEndings_CRLF()
     {
         var file = Path.Combine(_tempDir, "crlf.txt");

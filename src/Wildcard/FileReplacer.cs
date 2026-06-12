@@ -319,21 +319,25 @@ public static class FileReplacer
         return (lines, encoding, lineEnding);
     }
 
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     private static (string? Content, Encoding Encoding) ReadFileRaw(string filePath)
     {
         try
         {
-            using var reader = new StreamReader(filePath, detectEncodingFromByteOrderMarks: true);
+            // Default to BOM-less UTF-8 so writing back doesn't add a BOM the file
+            // never had; BOM detection switches CurrentEncoding when one is present.
+            using var reader = new StreamReader(filePath, Utf8NoBom, detectEncodingFromByteOrderMarks: true);
             var content = reader.ReadToEnd();
             return (content, reader.CurrentEncoding);
         }
         catch (IOException)
         {
-            return (null, Encoding.UTF8);
+            return (null, Utf8NoBom);
         }
         catch (UnauthorizedAccessException)
         {
-            return (null, Encoding.UTF8);
+            return (null, Utf8NoBom);
         }
     }
 
