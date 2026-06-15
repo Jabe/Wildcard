@@ -101,7 +101,15 @@ public static class ReplaceTool
                         : $"No files matched pattern '{pattern}'.";
                 }
 
-                var message = $"{globMatchedFiles} file{(globMatchedFiles > 1 ? "s" : "")} matched pattern '{pattern}', but none contained the find text.";
+                var findDisplay = multiLineFind ? find.Replace("\n", "\\n") : find;
+                if (findDisplay.Length > 80)
+                    findDisplay = findDisplay[..80] + "…";
+
+                var message = $"{globMatchedFiles} file{(globMatchedFiles > 1 ? "s" : "")} matched pattern '{pattern}', but none contained the find text `{findDisplay}`. "
+                    + "The glob worked — this is about the find text, not the pattern. "
+                    + "Run wildcard_grep with the same text to confirm its exact spelling/whitespace in those files.";
+                if (find != find.Trim())
+                    message += " Note: the find text has leading or trailing whitespace.";
                 if (!multiLineFind && find.Contains('|'))
                     message += $" {ToolHints.PipeInFind}";
                 return message;
