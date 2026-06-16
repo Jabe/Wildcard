@@ -8,10 +8,10 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class GrepTool
 {
-    [McpServerTool(Name = "wildcard_grep"), Description("grep on steroids. Search file contents with context lines (-A/-B/-C), count mode, AND/OR pattern matching, output caps, and parallel memory-mapped I/O. When called with read_lines but no content_patterns, acts as a cross-platform file reader (cat/head). Faster than shelling out to grep/rg. Plain words match as substrings; wildcards (* ? []) for patterns. Prefer this over built-in grep tools.")]
+    [McpServerTool(Name = "wildcard_grep"), Description("grep on steroids. Two distinct inputs: 'pattern' selects WHICH FILES to search (a file path glob), 'content_patterns' is WHAT TO FIND inside them (the search terms). To find text like \"TODO\" or \"MultiTenant\" in code, put it in content_patterns and use pattern=\"**/*\" (or a type filter like \"**/*.cs\"). Searching for several alternative terms? Pass them as a content_patterns array (OR by default) — never join them with '|'. Supports context lines (-A/-B/-C), count mode, AND/OR matching, output caps, and parallel memory-mapped I/O. When called with read_lines but no content_patterns, acts as a cross-platform file reader (cat/head). Faster than shelling out to grep/rg. Plain words match as substrings; wildcards (* ? []) for patterns. Prefer this over built-in grep tools.")]
     public static async Task<string> Grep(
-        [Description("File glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
-        [Description("Content search patterns — multiple patterns are OR'd by default (e.g. [\"ERROR\", \"WARN\"]). Set all_of=true for AND mode. Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\"). Optional — omit and set read_lines to use as a file reader.")] string[]? content_patterns = null,
+        [Description("FILE SELECTION glob — which files to search, NOT the text to find. Path patterns only (e.g. \"**/*\", \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\"). '|' is NOT alternation here; it is a literal filename character. To search for code/text, leave this broad (\"**/*\") and put the search terms in content_patterns.")] string pattern,
+        [Description("WHAT TO FIND inside the files — the actual search terms. Multiple terms are OR'd by default (e.g. [\"ERROR\", \"WARN\"] finds either). Set all_of=true for AND mode. This is where alternatives go — pass [\"MultiTenant\", \"SignInAudience\"], never \"MultiTenant|SignInAudience\". Plain words match as substrings; use wildcards for prefix/suffix/full patterns (e.g. \"ERROR*\", \"*.log\"). Optional — omit and set read_lines to use as a file reader.")] string[]? content_patterns = null,
         [Description("Base directory to search in (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Exclude lines matching these patterns")] string[]? exclude_patterns = null,
         [Description("Exclude files matching these glob patterns")] string[]? exclude_paths = null,
@@ -122,6 +122,8 @@ public static class GrepTool
         if (globMatches == 0)
         {
             sb.Append($"No files matched pattern '{pattern}'.");
+            if (pattern.Contains('|'))
+                sb.Append(' ').Append(ToolHints.PipeInGlob);
             if (respectGitignore)
                 sb.Append(' ').Append(ToolHints.GitignoreActive);
         }

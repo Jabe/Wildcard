@@ -8,9 +8,9 @@ namespace Wildcard.Mcp.Tools;
 [McpServerToolType]
 public static class GlobTool
 {
-    [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files by glob pattern — blazing fast, respects .gitignore, supports count mode and tree output. Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes, {a,b,c} brace expansion.")]
+    [McpServerTool(Name = "wildcard_glob"), Description("Like 'find' but doesn't hate you. Find files BY NAME/PATH using a glob pattern — blazing fast, respects .gitignore, supports count mode and tree output. This finds files; it does NOT search file contents (use wildcard_grep for that). Use this instead of shelling out to find/ls. Supports ** recursive, * wildcard, ? single char, [abc] classes, {a,b,c} brace expansion. Note: '|' is a literal filename character here, not alternation — use brace expansion like \"**/*.{cs,ts}\" for alternatives.")]
     public static async Task<string> Glob(
-        [Description("Glob pattern (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\")")] string pattern,
+        [Description("Glob pattern matching file PATHS (e.g. \"**/*.cs\", \"src/**/*.ts\", \"**/*.{cs,razor,css}\"). For alternatives use brace expansion \"{a,b}\", not '|'.")] string pattern,
         [Description("Base directory to search in (defaults to the first workspace root)")] string? base_directory = null,
         [Description("Glob patterns to exclude file paths (e.g. \"**/node_modules/**\")")] string[]? exclude_paths = null,
         [Description("Honor .gitignore files (default: true)")] bool respect_gitignore = true,
@@ -133,8 +133,13 @@ public static class GlobTool
         return sb2.ToString();
     }
 
-    private static string NoFilesMessage(string pattern, bool respectGitignore) =>
-        respectGitignore
-            ? $"No files matched pattern '{pattern}'. {ToolHints.GitignoreActive}"
-            : $"No files matched pattern '{pattern}'.";
+    private static string NoFilesMessage(string pattern, bool respectGitignore)
+    {
+        var sb = new StringBuilder($"No files matched pattern '{pattern}'.");
+        if (pattern.Contains('|'))
+            sb.Append(' ').Append(ToolHints.PipeInGlob);
+        if (respectGitignore)
+            sb.Append(' ').Append(ToolHints.GitignoreActive);
+        return sb.ToString();
+    }
 }

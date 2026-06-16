@@ -15,6 +15,10 @@ public static class ToolHints
     public const string PipeInFind =
         "Note: '|' is matched literally — wildcard syntax has no regex alternation.";
 
+    /// <summary>Hint when a glob pattern contains '|', mistaken for regex alternation.</summary>
+    public const string PipeInGlob =
+        "Note: '|' is matched literally in glob patterns — there is no regex alternation; use brace expansion like '**/*.{cs,ts}' for alternatives.";
+
     /// <summary>Hint when a glob matched nothing while .gitignore filtering was active.</summary>
     public const string GitignoreActive =
         "Note: .gitignore was respected — pass respect_gitignore=false if the file may be ignored.";

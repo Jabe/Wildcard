@@ -256,6 +256,18 @@ public class GrepToolTests : IDisposable
     }
 
     [Fact]
+    public async Task EmptyResult_PipeInGlobPattern_AppendsAlternationHint()
+    {
+        CreateFile("a.txt", "hello\n");
+
+        var result = await GrepTool.Grep("foo|bar", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,
+            content_patterns: ["hello"]);
+
+        Assert.Contains("No files matched pattern 'foo|bar'", result);
+        Assert.Contains("'|' is matched literally in glob patterns", result);
+    }
+
+    [Fact]
     public async Task EmptyResult_ReaderMode_NamesPattern()
     {
         var result = await GrepTool.Grep("missing.txt", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false,

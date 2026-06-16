@@ -93,6 +93,16 @@ public class GlobToolTests : IDisposable
     }
 
     [Fact]
+    public async Task EmptyResult_PipeInPattern_AppendsAlternationHint()
+    {
+        var result = await GlobTool.Glob("foo|bar", rootsProvider: _rootsProvider, server: null!, base_directory: _tempDir, respect_gitignore: false);
+
+        Assert.Contains("No files matched pattern 'foo|bar'", result);
+        Assert.Contains("'|' is matched literally in glob patterns", result);
+        Assert.Contains("brace expansion", result);
+    }
+
+    [Fact]
     public async Task Tree_WithLimit()
     {
         for (int i = 0; i < 10; i++)
